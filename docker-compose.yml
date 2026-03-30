@@ -1,0 +1,45 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: radio_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: radio_user
+      POSTGRES_PASSWORD: radio_password
+      POSTGRES_DB: radio_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U radio_user"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    container_name: radio_backend
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      PORT: 3001
+      DATABASE_URL: postgresql://radio_user:radio_password@postgres:5432/radio_db?schema=public
+      DIRECT_URL: postgresql://radio_user:radio_password@postgres:5432/radio_db?schema=public
+      JWT_SECRET: ${JWT_SECRET:-your-jwt-secret-change-in-production}
+      API_BASE_URL: http://localhost:3001
+      CORS_ORIGIN: "*"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./uploads:/app/uploads
+
+volumes:
+  postgres_data:
+

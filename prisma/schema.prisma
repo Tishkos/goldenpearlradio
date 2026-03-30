@@ -1,0 +1,472 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+//--------------------------------------------------------------------------------
+// Enums
+//--------------------------------------------------------------------------------
+
+enum ContentType {
+  TRACK
+  ADVERTISEMENT
+  NEWS
+  TALK
+  HOST_COMMENTARY
+}
+
+//--------------------------------------------------------------------------------
+// 1. Core and User Management
+//--------------------------------------------------------------------------------
+
+model User {
+  id        Int      @id @default(autoincrement())
+  username  String   @unique
+  password  String
+  isAdmin   Boolean  @default(false)
+  email     String?  @unique
+  authUserId String? @unique @map("auth_user_id")
+  fullName  String?
+  createdAt DateTime @default(now())
+
+  // Relations
+  products          Product[]
+  likes             Like[]
+
+  @@map("users")
+}
+
+//--------------------------------------------------------------------------------
+// 2. Radio Station Core Model
+//--------------------------------------------------------------------------------
+// RadioStation model added by assistant per user's request
+model RadioStation {
+  id        Int      @id @default(autoincrement())
+  name      String
+  description String?
+  logoUrl   String?
+  streamUrl String?
+  timezone  String   @default("Asia/Dubai")
+  locationId Int?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  // Relations
+  location        Location?       @relation(fields: [locationId], references: [id])
+  hosts           Host[]
+  scheduledShows  ScheduledShow[]
+  dailyListeners  DailyListener[]
+  likes           Like[]
+
+  @@map("radio_stations")
+}
+
+model Host {
+  id        Int      @id @default(autoincrement())
+  name      String
+  bio       String?
+  imageUrl  String?
+  aiStyle   String?
+  aiVoiceId String?
+  language  String?  @default("en-US") // BCP-47 language code for multi-language TTS support
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  // Relations
+  radioStations     RadioStation[]
+  shows             Show[]
+  hostCommentaries  HostCommentary[]
+  newsHostAudios    NewsHostAudio[]
+  advertisementHostAudios AdvertisementHostAudio[]
+
+  @@map("hosts")
+}
+
+model Show {
+  id        Int      @id @default(autoincrement())
+  title     String
+  description String?
+  imageUrl  String?
+  hostId    Int
+  featured  Boolean  @default(false)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  // Relations
+  host          Host            @relation(fields: [hostId], references: [id])
+  showItems     ShowItem[]      @relation("ShowItems")
+  scheduledShows ScheduledShow[]
+  likes          Like[]
+
+  @@map("shows")
+}
+
+model ScheduledShow {
+  id            Int      @id @default(autoincrement())
+  showId        Int
+  radioStationId Int
+  locationId    Int?
+  startTime     DateTime
+  endTime       DateTime
+  createdAt     DateTime @default(now())
+
+  // Relations
+  show          Show            @relation(fields: [showId], references: [id])
+  radioStation  RadioStation    @relation(fields: [radioStationId], references: [id])
+  location      Location?       @relation(fields: [locationId], references: [id])
+
+  @@map("scheduled_shows")
+}
+
+model ShowItem {
+  id                  Int     @id @default(autoincrement())
+  showId              Int
+  position            Int
+  startTimeOffset     Int     @default(0)  // When this item starts in the show timeline (in seconds)
+  contentType         ContentType
+  contentId           Int
+  notes               String?
+  volume              Int     @default(100)
+  fadeInDuration      Int     @default(0)
+  fadeOutDuration     Int     @default(0)
+  playbackStartTime   Int     @default(0)
+  playbackEndTime     Int?
+  mixMode             String  @default("sequential") // sequential, overlay, crossfade
+  date                String? // Date in YYYY-MM-DD format for date-based timelines
+  
+  // Interruption/Overlay fields (optional, for items that interrupt/overlay another item)
+  parentItemId        Int?    // If this item overlays/interrupts another item
+  startTimeInParent   Int?    // When in the parent track this starts (in seconds)
+  duckingVolume       Int?    // Volume to duck the parent track to
+  
+  // Relations
+  show                Show        @relation("ShowItems", fields: [showId], references: [id])
+  parentItem          ShowItem?   @relation("ItemOverlays", fields: [parentItemId], references: [id])
+  overlayItems        ShowItem[]  @relation("ItemOverlays")
+
+  @@map("show_items")
+}
+
+//--------------------------------------------------------------------------------
+// 3. Content Collections - REMOVED
+//--------------------------------------------------------------------------------
+
+// Albums and Playlists removed per user request
+
+//--------------------------------------------------------------------------------
+// 4. Content Items
+//--------------------------------------------------------------------------------
+
+model Track {
+  id        Int      @id @default(autoincrement())
+  title     String
+  artist    String
+  duration  Int
+  url       String
+  coverArt  String?
+  genre     String?
+  mood      String?
+  createdAt DateTime @default(now())
+
+  // Relations - removed album relation
+  likes     Like[]
+  plays     TrackPlay[]
+
+  @@map("tracks")
+}
+
+model TrackPlay {
+  id        Int      @id @default(autoincrement())
+  trackId   Int
+  playedAt  DateTime @default(now())
+
+  track     Track    @relation(fields: [trackId], references: [id], onDelete: Cascade)
+
+  @@map("track_plays")
+}
+
+// Single like model to support liking Tracks, Radio Stations, or Shows
+model Like {
+  id         Int      @id @default(autoincrement())
+  userId     Int
+  trackId    Int?
+  radioStationId Int?
+  showId     Int?
+  createdAt  DateTime @default(now())
+
+  // Relations
+  user       User         @relation(fields: [userId], references: [id])
+  track      Track?       @relation(fields: [trackId], references: [id])
+  radioStation RadioStation? @relation(fields: [radioStationId], references: [id])
+  show       Show?        @relation(fields: [showId], references: [id])
+
+  @@map("likes")
+  @@unique([userId, trackId])
+  @@unique([userId, radioStationId])
+  @@unique([userId, showId])
+}
+
+model Advertisement {
+  id          Int      @id @default(autoincrement())
+  title       String
+  advertiser  String
+  productId   Int
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  // Relations
+  product     Product  @relation(fields: [productId], references: [id])
+  hostAudios  AdvertisementHostAudio[]
+
+  @@map("advertisements")
+}
+
+model News {
+  id        Int      @id @default(autoincrement())
+  newsType  String
+  title     String
+  message   String?
+  imageUrl  String?
+  linkUrl   String?
+  linkBehavior String @default("dialog")
+  sortOrder Int      @default(0)
+  category  String?
+  priority  String   @default("normal")
+  expiresAt DateTime?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  locationId Int?
+
+  // Relations
+  location  Location? @relation(fields: [locationId], references: [id])
+  hostAudios NewsHostAudio[]
+
+  @@map("news")
+}
+
+model NewsHostAudio {
+  id        Int      @id @default(autoincrement())
+  newsId    Int
+  hostId    Int
+  audioUrl  String
+  duration  Int?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  // Relations
+  news      News     @relation(fields: [newsId], references: [id])
+  host      Host     @relation(fields: [hostId], references: [id])
+
+  @@unique([newsId, hostId])
+  @@map("news_host_audio")
+}
+
+model AdvertisementHostAudio {
+  id              Int      @id @default(autoincrement())
+  advertisementId Int
+  hostId          Int
+  audioUrl        String
+  duration        Int?
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+
+  // Relations
+  advertisement   Advertisement @relation(fields: [advertisementId], references: [id])
+  host            Host          @relation(fields: [hostId], references: [id])
+
+  @@unique([advertisementId, hostId])
+  @@map("advertisement_host_audio")
+}
+
+model Talk {
+  id          Int      @id @default(autoincrement())
+  title       String
+  speaker     String?
+  summary     String?
+  audioUrl    String?
+  coverUrl    String?
+  duration    Int?
+  talkType    String?
+  language    String?  @default("en")
+  tags        Json?    @default("[]")
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  @@map("talks")
+}
+
+model HostCommentary {
+  id                Int      @id @default(autoincrement())
+  title             String
+  script            String
+  hostId            Int?
+  audioUrl          String?
+  duration          Int?
+  createdAt         DateTime @default(now())
+
+  // Relations
+  host              Host?    @relation(fields: [hostId], references: [id])
+
+  @@map("host_commentary")
+}
+
+//--------------------------------------------------------------------------------
+// 5. E-commerce and Business Logic
+//--------------------------------------------------------------------------------
+
+model Location {
+  id        Int      @id @default(autoincrement())
+  name      String
+  address   String
+  city      String?
+  country   String?
+  mapUrl    String?
+  imageUrl  String?
+  rating    Int?
+  tags      Json     @default("[]")
+  createdAt DateTime @default(now())
+
+  // Relations
+  radioStations   RadioStation[]
+  scheduledShows  ScheduledShow[]
+  products        Product[]
+  news            News[]
+  promotions      Promotion[]
+
+  @@map("locations")
+}
+
+
+model Product {
+  id              Int      @id @default(autoincrement())
+  userId          Int
+  locationId      Int?
+  productType     String   @default("affiliate")
+  name            String
+  description     String
+  price           Int
+  currency        String   @default("aed")
+  category        String   @default("GENERAL")  // Changed from enum to String for flexibility
+  details         Json
+  imageUrl        String?
+  coverUrl        String?  // Cover image URL (optional)
+  audioUrl        String?  // Audio content URL (optional)
+  duration        Int?     // Duration in seconds if audio is present
+  affiliateUrl    String
+  clickCount      Int      @default(0)
+  tags            Json     @default("[]")
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+
+  // Relations
+  user            User            @relation(fields: [userId], references: [id])
+  location        Location?       @relation(fields: [locationId], references: [id])
+  advertisements  Advertisement[]
+  promotions      Promotion[]
+
+  @@map("products")
+}
+
+model Promotion {
+  id           Int      @id @default(autoincrement())
+  title        String
+  message      String?
+  imageUrl     String?
+  linkUrl      String?
+  linkBehavior String   @default("dialog")
+  category     String?
+  isActive     Boolean  @default(true)
+  sortOrder    Int      @default(0)
+  createdAt    DateTime @default(now())
+  productId    Int?
+  locationId   Int?
+
+  // Relations
+  product      Product?  @relation(fields: [productId], references: [id])
+  location     Location? @relation(fields: [locationId], references: [id])
+
+  @@map("promotions")
+}
+
+//--------------------------------------------------------------------------------
+// 6. Partnership and Business Development
+//--------------------------------------------------------------------------------
+
+model PartnershipPitch {
+  id                  Int      @id @default(autoincrement())
+  companyName         String
+  contactName         String
+  emailAddress        String
+  phoneNumber         String?
+  partnershipType     String
+  budgetRange         String?
+  eventProductDetails String
+  targetAudience      String?
+  timeline            String?
+  additionalMessage   String?
+  status              String   @default("pending") // pending, reviewed, approved, rejected
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@map("partnership_pitches")
+}
+
+//--------------------------------------------------------------------------------
+// Analytics & Metrics
+//--------------------------------------------------------------------------------
+
+model DailyListener {
+  id              Int      @id @default(autoincrement())
+  radioStationId  Int
+  date            DateTime @db.Date
+  listenerCount   Int      @default(0)
+  peakListeners   Int      @default(0)
+  averageListenDuration Int? // in seconds
+  uniqueListeners Int      @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // Relations
+  radioStation    RadioStation @relation(fields: [radioStationId], references: [id])
+
+  // Ensure one record per radio station per day
+  @@unique([radioStationId, date])
+  @@map("daily_listeners")
+}
+
+//--------------------------------------------------------------------------------
+// Timeline Presets
+//--------------------------------------------------------------------------------
+
+model TimelinePreset {
+  id        Int      @id @default(autoincrement())
+  name      String
+  date      String   // Date in YYYY-MM-DD format when preset was created
+  items     Json     // Array of ShowItem data
+  createdAt DateTime @default(now())
+
+  @@map("timeline_presets")
+}
+
+//--------------------------------------------------------------------------------
+// Published Timelines (for public playback)
+//--------------------------------------------------------------------------------
+
+model PublishedTimeline {
+  id        Int      @id @default(autoincrement())
+  date      String   @unique // Date in YYYY-MM-DD format
+  publishedAt DateTime @default(now())
+  publishedBy Int?    // User ID who published it
+
+  @@map("published_timelines")
+}
+
+// Explicit join table for playlists and tracks - REMOVED

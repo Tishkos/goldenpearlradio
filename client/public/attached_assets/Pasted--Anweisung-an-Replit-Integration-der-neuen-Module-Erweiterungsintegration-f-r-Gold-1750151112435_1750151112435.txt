@@ -1,0 +1,60 @@
+🧠 🛠️ Anweisung an Replit: Integration der neuen Module
+
+/**
+ * 📡 Erweiterungsintegration für Golden Pearl Radio Dubai
+ * Bitte folgende Module in das bestehende React + Node.js Admin-System einfügen.
+ */
+
+1. 🔴 // Breaking News System
+- Add new Admin Page: /admin/breaking-news
+- Function: Input field (text), select voice, preview voice output (TTS), save and inject at runtime
+- Integration into Scheduler: Allow insertion of breaking message into any time block
+- Add emergency icon to top bar (visible always)
+
+2. 🎚️ // DJ Panel – Music Flow Control
+- Add Admin Page: /admin/dj-panel
+- Upload DJ-Mix (2–3h audio file)
+- Register file as a full block in the scheduler
+- Crossfade/cut/fade-in settings (per file or default mode)
+- Auto-schedule logic: Push/rearrange blocks when DJ block is inserted
+- Connect to commerce module: Suggest DJ-related shop items automatically
+
+3. 🧩 // Format & Content Management
+- Extend /admin/formats with:
+  - New Format + Chapters creation
+  - Assign voices per format
+  - Save standard intros/outros and reusable segment templates
+
+4. 🗣️ // Speaker Management Panel
+- Add Admin Page: /admin/speakers
+- Upload WAV or MP3 voice samples
+- System generates synthetic voice (TTS-compatible)
+- Assign code (e.g. A, B, C) and color tag
+- Allow assignment in Scheduler via dropdown or smart match
+
+5. ⏱️ // Extended Scheduler Logic
+- Update /admin/scheduler:
+  - Allow voice + format + transition setting per minute
+  - Handle DJ blocks and adapt timing dynamically
+  - Add “Live” flag and sound block types (music, voice, mix, ad)
+
+6. 🗺️ // VISIT DUBAI Interactive Map
+- Add Landing Page section: /visit-dubai
+- Display SVG-based interactive Dubai map with clickable hotspots
+- Each hotspot triggers modal with product info and external ticket links
+- Connect with shopping panel & add tracking (clicks, conversions)
+- Role: Only admins can manage map offers; users can book through affiliate
+
+7. 📄 // Contract Download & Shop Logic
+- Upload standard agreement: /public/docs/golden-pearl-promotion-agreement.pdf
+- Display download link in /admin/shop-settings
+- Add surcharge logic to external ticket links (default +10%)
+- Include “Partner Agreement Required” logic: Only linked partners appear on radio/shop
+
+8. 🌍 // Multilingual Manual Builder
+- Add script: /utils/manualBuilder.ts
+- Generate full admin manual as PDF with:
+  - Numbered instructions
+  - Admin interface screenshots
+  - Simplified prompts for ChatGPT translation
+- Output: /public/docs/golden-pearl-manual.pdf

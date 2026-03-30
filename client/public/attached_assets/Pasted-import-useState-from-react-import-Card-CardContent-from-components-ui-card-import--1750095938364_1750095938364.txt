@@ -1,0 +1,113 @@
+import { useState } from "react";
+import { Card, CardContent } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Calendar } from "@/components/ui/calendar";
+import { Textarea } from "@/components/ui/textarea";
+
+export default function RadioSchedulerPreview() {
+  const [selectedBlock, setSelectedBlock] = useState(null);
+  const [selectedEventText, setSelectedEventText] = useState("");
+  const [dialoguePreview, setDialoguePreview] = useState("");
+
+  const blocks = [
+    { time: "08:00 - 09:00", type: "Music", label: "Upbeat Arabic Lounge", color: "bg-yellow-200" },
+    { time: "09:00 - 10:00", type: "Content", label: "Fashion Radio (Nour)", color: "bg-pink-200" },
+    { time: "10:00 - 11:00", type: "Music", label: "Classic Meets Lounge", color: "bg-blue-200" },
+    { time: "11:00 - 12:00", type: "Content", label: "Talk of the Town (Omar)", color: "bg-green-200" },
+  ];
+
+  const eventCalendar = [
+    { date: new Date(2025, 5, 27), event: "Dave Chappelle Live in Dubai" },
+    { date: new Date(2025, 5, 25), event: "Pete Davidson Stand-up Night" },
+    { date: new Date(2025, 6, 4), event: "PFL MMA Riyadh" },
+  ];
+
+  const generateDialogue = () => {
+    if (!selectedEventText.trim()) return;
+    setDialoguePreview(`🗣️ Omar: Let's talk about ${selectedEventText} – it’s stirring buzz in the city!\n💃 Layla: Yes! Especially how it fits into the local scene. What’s your take?\n🧔 Rashid: Well, I think it says a lot about cultural openness lately...\n🎙️ Nour: And the audience? They’ll love the vibe. Let’s play something to match!\n\n🔗 Purchase tickets now via our Golden Pearl Shopping Panel. A 10% booking surcharge applies for our exclusive commentary coverage.`);
+  };
+
+  return (
+    <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div>
+        <h2 className="text-xl font-bold mb-2">📅 Weekly Schedule</h2>
+        <div className="grid grid-rows-4 gap-2">
+          {blocks.map((block, idx) => (
+            <Card
+              key={idx}
+              className={`cursor-pointer ${block.color}`}
+              onClick={() => setSelectedBlock(block)}
+            >
+              <CardContent>
+                <p className="font-medium">{block.time}</p>
+                <p>{block.label}</p>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      </div>
+
+      <div>
+        <h2 className="text-xl font-bold mb-2">🧱 Block Detail</h2>
+        {selectedBlock ? (
+          <div className="space-y-2">
+            <p><strong>Time:</strong> {selectedBlock.time}</p>
+            <p><strong>Type:</strong> {selectedBlock.type}</p>
+            <p><strong>Format:</strong> {selectedBlock.label}</p>
+            <Button>Inject Content</Button>
+            <Button variant="outline">View Alternatives</Button>
+          </div>
+        ) : (
+          <p>Select a block to see details.</p>
+        )}
+
+        <h2 className="text-xl font-bold mt-4 mb-2">📍 Event Calendar</h2>
+        <Calendar
+          mode="single"
+          modifiers={{
+            booked: eventCalendar.map((e) => e.date),
+          }}
+          modifiersClassNames={{
+            booked: "bg-red-200 text-black",
+          }}
+        />
+        <ul className="mt-2 text-sm">
+          {eventCalendar.map((e, i) => (
+            <li key={i}>{e.date.toDateString()}: {e.event}</li>
+          ))}
+        </ul>
+
+        <h2 className="text-xl font-bold mt-4 mb-2">🧠 Event Matrix Input</h2>
+        <Textarea
+          placeholder="Paste your event or theme here..."
+          value={selectedEventText}
+          onChange={(e) => setSelectedEventText(e.target.value)}
+        />
+        <Button className="mt-2" onClick={generateDialogue}>Generate Dialogue</Button>
+
+        {dialoguePreview && (
+          <div className="mt-4 p-2 bg-gray-100 rounded">
+            <h3 className="font-bold">🎙️ Dialogue Preview</h3>
+            <pre className="text-sm whitespace-pre-wrap">{dialoguePreview}</pre>
+          </div>
+        )}
+
+        <div className="mt-8">
+          <h2 className="text-xl font-bold mb-2">📄 Partner Ticketing Agreement</h2>
+          <p className="text-sm mb-2">
+            All events promoted on Golden Pearl Radio Dubai are subject to a 10% surcharge when purchased via our Shopping Panel. 
+            Ticket providers must agree to this promotional structure via contract in order to be listed. 
+            You can download the standard partner contract template below:
+          </p>
+          <a
+            href="/contracts/golden-pearl-ticket-promotion-agreement.pdf"
+            className="text-blue-600 underline"
+            download
+          >
+            Download Ticket Promotion Partner Agreement (PDF)
+          </a>
+        </div>
+      </div>
+    </div>
+  );
+}

@@ -1,0 +1,233 @@
+-- WARNING: This schema is for context only and is not meant to be run.
+-- Table order and constraints may not be valid for execution.
+
+CREATE TABLE public._AdvertisementToProduct (
+  A integer NOT NULL,
+  B integer NOT NULL,
+  CONSTRAINT _AdvertisementToProduct_pkey PRIMARY KEY (A, B),
+  CONSTRAINT _AdvertisementToProduct_A_fkey FOREIGN KEY (A) REFERENCES public.advertisements(id),
+  CONSTRAINT _AdvertisementToProduct_B_fkey FOREIGN KEY (B) REFERENCES public.products(id)
+);
+CREATE TABLE public._HostToRadioStation (
+  A integer NOT NULL,
+  B integer NOT NULL,
+  CONSTRAINT _HostToRadioStation_pkey PRIMARY KEY (A, B),
+  CONSTRAINT _HostToRadioStation_A_fkey FOREIGN KEY (A) REFERENCES public.hosts(id),
+  CONSTRAINT _HostToRadioStation_B_fkey FOREIGN KEY (B) REFERENCES public.radio_stations(id)
+);
+CREATE TABLE public.advertisements (
+  id integer NOT NULL DEFAULT nextval('advertisements_id_seq'::regclass),
+  title text NOT NULL,
+  advertiser text NOT NULL,
+  audioUrl text NOT NULL,
+  duration integer NOT NULL,
+  isActive boolean NOT NULL DEFAULT true,
+  createdAt timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT advertisements_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.daily_listeners (
+  id integer NOT NULL DEFAULT nextval('daily_listeners_id_seq'::regclass),
+  radioStationId integer NOT NULL,
+  date date NOT NULL,
+  listenerCount integer NOT NULL DEFAULT 0,
+  peakListeners integer NOT NULL DEFAULT 0,
+  averageListenDuration integer,
+  uniqueListeners integer NOT NULL DEFAULT 0,
+  createdAt timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updatedAt timestamp without time zone NOT NULL,
+  CONSTRAINT daily_listeners_pkey PRIMARY KEY (id),
+  CONSTRAINT daily_listeners_radioStationId_fkey FOREIGN KEY (radioStationId) REFERENCES public.radio_stations(id)
+);
+CREATE TABLE public.host_commentary (
+  id integer NOT NULL DEFAULT nextval('host_commentary_id_seq'::regclass),
+  title text NOT NULL,
+  script text NOT NULL,
+  hostId integer,
+  estimatedDuration integer NOT NULL,
+  createdAt timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  audioUrl text,
+  CONSTRAINT host_commentary_pkey PRIMARY KEY (id),
+  CONSTRAINT host_commentary_hostId_fkey FOREIGN KEY (hostId) REFERENCES public.hosts(id)
+);
+CREATE TABLE public.hosts (
+  id integer NOT NULL DEFAULT nextval('hosts_id_seq'::regclass),
+  name text NOT NULL,
+  hostType text NOT NULL,
+  bio text,
+  imageUrl text,
+  socialLinks jsonb NOT NULL,
+  aiStyle text,
+  aiVoiceId text,
+  specialties jsonb NOT NULL,
+  isActive boolean NOT NULL DEFAULT true,
+  createdAt timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT hosts_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.likes (
+  id integer NOT NULL DEFAULT nextval('likes_id_seq'::regclass),
+  userId integer NOT NULL,
+  trackId integer,
+  createdAt timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  radioStationId integer,
+  CONSTRAINT likes_pkey PRIMARY KEY (id),
+  CONSTRAINT likes_userId_fkey FOREIGN KEY (userId) REFERENCES public.users(id),
+  CONSTRAINT likes_trackId_fkey FOREIGN KEY (trackId) REFERENCES public.tracks(id),
+  CONSTRAINT likes_radioStationId_fkey FOREIGN KEY (radioStationId) REFERENCES public.radio_stations(id)
+);
+CREATE TABLE public.locations (
+  id integer NOT NULL DEFAULT nextval('locations_id_seq'::regclass),
+  name text NOT NULL,
+  address text NOT NULL,
+  city text,
+  country text,
+  mapUrl text,
+  imageUrl text,
+  rating integer,
+  tags jsonb NOT NULL DEFAULT '[]'::jsonb,
+  createdAt timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT locations_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.news (
+  id integer NOT NULL DEFAULT nextval('news_id_seq'::regclass),
+  newsType text NOT NULL,
+  title text NOT NULL,
+  message text,
+  audioUrl text,
+  duration integer,
+  category text,
+  priority text NOT NULL DEFAULT 'normal'::text,
+  expiresAt timestamp without time zone,
+  isActive boolean NOT NULL DEFAULT true,
+  createdAt timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT news_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.partnership_pitches (
+  id integer NOT NULL DEFAULT nextval('partnership_pitches_id_seq'::regclass),
+  companyName text NOT NULL,
+  contactName text NOT NULL,
+  emailAddress text NOT NULL,
+  phoneNumber text,
+  partnershipType text NOT NULL,
+  budgetRange text,
+  eventProductDetails text NOT NULL,
+  targetAudience text,
+  timeline text,
+  additionalMessage text,
+  status text NOT NULL DEFAULT 'pending'::text,
+  createdAt timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updatedAt timestamp without time zone NOT NULL,
+  CONSTRAINT partnership_pitches_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.products (
+  id integer NOT NULL DEFAULT nextval('products_id_seq'::regclass),
+  userId integer NOT NULL,
+  locationId integer,
+  productType text NOT NULL DEFAULT 'affiliate'::text,
+  name text NOT NULL,
+  description text NOT NULL,
+  price integer NOT NULL,
+  currency text NOT NULL DEFAULT 'aed'::text,
+  category text NOT NULL,
+  details jsonb NOT NULL,
+  imageUrl text,
+  affiliateUrl text NOT NULL,
+  tags jsonb NOT NULL DEFAULT '[]'::jsonb,
+  isActive boolean NOT NULL DEFAULT true,
+  createdAt timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  clickCount integer NOT NULL DEFAULT 0,
+  CONSTRAINT products_pkey PRIMARY KEY (id),
+  CONSTRAINT products_userId_fkey FOREIGN KEY (userId) REFERENCES public.users(id),
+  CONSTRAINT products_locationId_fkey FOREIGN KEY (locationId) REFERENCES public.locations(id)
+);
+CREATE TABLE public.radio_stations (
+  id integer NOT NULL DEFAULT nextval('radio_stations_id_seq'::regclass),
+  name text NOT NULL,
+  description text,
+  logoUrl text,
+  streamUrl text,
+  timezone text NOT NULL DEFAULT 'Asia/Dubai'::text,
+  isActive boolean NOT NULL DEFAULT true,
+  createdAt timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT radio_stations_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.scheduled_shows (
+  id integer NOT NULL DEFAULT nextval('scheduled_shows_id_seq'::regclass),
+  radioStationId integer NOT NULL,
+  hostId integer,
+  locationId integer,
+  title text NOT NULL,
+  description text,
+  imageUrl text,
+  startTime timestamp without time zone NOT NULL,
+  endTime timestamp without time zone NOT NULL,
+  createdAt timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  featured boolean NOT NULL DEFAULT false,
+  CONSTRAINT scheduled_shows_pkey PRIMARY KEY (id),
+  CONSTRAINT scheduled_shows_radioStationId_fkey FOREIGN KEY (radioStationId) REFERENCES public.radio_stations(id),
+  CONSTRAINT scheduled_shows_hostId_fkey FOREIGN KEY (hostId) REFERENCES public.hosts(id),
+  CONSTRAINT scheduled_shows_locationId_fkey FOREIGN KEY (locationId) REFERENCES public.locations(id)
+);
+CREATE TABLE public.show_item_interruptions (
+  id integer NOT NULL DEFAULT nextval('show_item_interruptions_id_seq'::regclass),
+  showItemId integer NOT NULL,
+  startTimeInTrack integer NOT NULL,
+  contentType USER-DEFINED NOT NULL DEFAULT 'HOST_COMMENTARY'::"ContentType",
+  contentId integer NOT NULL,
+  duckingVolume integer NOT NULL DEFAULT 20,
+  interruptionVolume integer NOT NULL DEFAULT 100,
+  CONSTRAINT show_item_interruptions_pkey PRIMARY KEY (id),
+  CONSTRAINT show_item_interruptions_showItemId_fkey FOREIGN KEY (showItemId) REFERENCES public.show_items(id)
+);
+CREATE TABLE public.show_items (
+  id integer NOT NULL DEFAULT nextval('show_items_id_seq'::regclass),
+  showId integer NOT NULL,
+  position integer NOT NULL,
+  contentType USER-DEFINED NOT NULL,
+  contentId integer NOT NULL,
+  notes text,
+  volume integer NOT NULL DEFAULT 100,
+  fadeInDuration integer NOT NULL DEFAULT 0,
+  fadeOutDuration integer NOT NULL DEFAULT 0,
+  playbackStartTime integer NOT NULL DEFAULT 0,
+  playbackEndTime integer,
+  CONSTRAINT show_items_pkey PRIMARY KEY (id),
+  CONSTRAINT show_items_showId_fkey FOREIGN KEY (showId) REFERENCES public.scheduled_shows(id)
+);
+CREATE TABLE public.talks (
+  id integer NOT NULL DEFAULT nextval('talks_id_seq'::regclass),
+  title text NOT NULL,
+  speaker text,
+  summary text,
+  audioUrl text,
+  duration integer,
+  talkType text,
+  language text DEFAULT 'en'::text,
+  tags jsonb DEFAULT '[]'::jsonb,
+  isActive boolean NOT NULL DEFAULT true,
+  createdAt timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  coverUrl text,
+  CONSTRAINT talks_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.tracks (
+  id integer NOT NULL DEFAULT nextval('tracks_id_seq'::regclass),
+  title text NOT NULL,
+  artist text NOT NULL,
+  duration integer NOT NULL,
+  url text NOT NULL,
+  coverArt text,
+  genre text,
+  mood text,
+  createdAt timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT tracks_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.users (
+  id integer NOT NULL DEFAULT nextval('users_id_seq'::regclass),
+  username text NOT NULL,
+  password text NOT NULL,
+  isAdmin boolean NOT NULL DEFAULT false,
+  email text,
+  fullName text,
+  createdAt timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  auth_user_id text,
+  CONSTRAINT users_pkey PRIMARY KEY (id)
+);
