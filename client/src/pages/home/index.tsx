@@ -26,7 +26,6 @@ export default function Home() {
     isPlaying,
     volume,
     isMuted,
-    audioData,
     currentTime,
     currentListeners,
     hasPlayableContent,
@@ -64,8 +63,7 @@ export default function Home() {
       : null;
 
   const heroOrnament = "Est. Dubai, UAE";
-  const heroSubtitle =
-    "Your Ultimate Audio Experience. Tune in for the Best Music, News, and Entertainment from the Heart of the UAE";
+  const heroSubtitle = "The Media Network for Music News and Entertainment.";
   return (
     <div className={["min-h-screen", introActive ? "invisible pointer-events-none" : ""].join(" ")}>
       <div className="px-4 pt-10 md:pt-12">
@@ -77,7 +75,7 @@ export default function Home() {
           </div>
 
           <h1 className="font-gp-display font-bold leading-[1.15] tracking-[-0.01em] text-[clamp(2.4rem,5vw,3.8rem)] text-white">
-            Welcome to Golden Pearl Radio Dubai
+            Golden Pearl Radio <span className="text-red-500">Dubai</span>
           </h1>
 
           <p className="mt-4 mx-auto max-w-[560px] font-gp-sans text-[1.15rem] tracking-[0.02em] text-white/85">
@@ -101,18 +99,6 @@ export default function Home() {
                   aria-hidden="true"
                   className="pointer-events-none absolute inset-0 border border-white/25 rounded-[1.5rem]"
                 />
-                <div className="px-7 pt-6 pb-4">
-                  <div className="rounded-2xl border border-white/25 bg-white/10 px-5 py-4 backdrop-blur-md">
-                    <TopicOfTheWeek />
-                  </div>
-                </div>
-                <RadioHeader currentTime={currentTime} />
-                <CurrentSongDisplay
-                  title={displaySongTitle}
-                  isLive={displayIsLive}
-                  label="Now Playing"
-                />
-
                 <div className="px-7 py-6">
                   <div className="flex items-center gap-6">
                     <VolumeControl
@@ -132,6 +118,17 @@ export default function Home() {
                     <ListenerCount count={currentListeners} />
                   </div>
                 </div>
+                <RadioHeader currentTime={currentTime} />
+                <div className="px-7 pt-2 pb-4">
+                  <div className="rounded-2xl border border-white/25 bg-white/10 px-5 py-4 backdrop-blur-md">
+                    <TopicOfTheWeek />
+                  </div>
+                </div>
+                <CurrentSongDisplay
+                  title={displaySongTitle}
+                  isLive={displayIsLive}
+                  label="Now Playing"
+                />
 
                 <div className="mt-auto shrink-0 px-7 pb-6 pt-4 border-t border-white/20 bg-[linear-gradient(180deg,rgba(255,255,255,0.06),rgba(255,255,255,0.12))]">
                   <WhatsappContactButton />

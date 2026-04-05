@@ -1,4 +1,13 @@
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:3001/api';
+const FALLBACK_ORIGIN =
+  typeof window !== 'undefined' ? window.location.origin : 'http://127.0.0.1:3001';
+
+const API_BASE_URL = (
+  import.meta.env.VITE_API_URL || `${FALLBACK_ORIGIN}/api`
+).replace(/\/+$/, '');
+
+const STREAM_SERVER_BASE_URL = (
+  import.meta.env.VITE_STREAM_SERVER_URL || FALLBACK_ORIGIN
+).replace(/\/+$/, '');
 
 const PUBLIC_GET_RETRY_PATTERNS = [
   /^\/products(?:\/\d+)?(?:\/click)?$/,
@@ -120,7 +129,7 @@ async function apiRequest<T>(
   } catch (error: any) {
     // Handle network errors gracefully
     if (error.message?.includes('Failed to fetch') || error.message?.includes('ERR_CONNECTION_REFUSED')) {
-      throw new Error('Backend server is not running. Please start it with: npm run dev:server');
+      throw new Error('Cannot reach backend API. Check your backend container and API URL configuration.');
     }
     throw error;
   }
@@ -199,5 +208,13 @@ export const api = {
 };
 
 // Export token management functions
+export function getApiBaseUrl(): string {
+  return API_BASE_URL;
+}
+
+export function getStreamServerBaseUrl(): string {
+  return STREAM_SERVER_BASE_URL;
+}
+
 export { getAuthToken, setAuthToken, removeAuthToken };
 

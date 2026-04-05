@@ -86,61 +86,6 @@ export function BroadcastStatus({ isLive }: { isLive: boolean }) {
 }
 
 /**
- * Waveform Visualization Component
- */
-export function Waveform({
-  audioData,
-  isPlaying,
-}: {
-  audioData: number[];
-  isPlaying: boolean;
-}) {
-  const minHeight = 8;
-  const maxHeight = 64;
-  const bars = audioData.slice(0, 44);
-
-  return (
-    <div className="relative px-6 py-2 border-y border-white/20 bg-[linear-gradient(180deg,rgba(255,255,255,0.08)_0%,rgba(255,255,255,0.03)_100%)]">
-      <div
-        aria-hidden="true"
-        className="pointer-events-none absolute inset-x-6 top-1/2 h-10 -translate-y-1/2 rounded-full bg-[radial-gradient(circle,rgba(255,255,255,0.22)_0%,rgba(255,255,255,0.1)_35%,transparent_75%)]"
-      />
-      <div className="relative flex items-end justify-center gap-[3px] h-16">
-      {bars.map((value, i) => {
-        const shaped = Math.min(1, value * 1.15 + Math.abs(Math.sin(i * 0.28)) * 0.1);
-        const height = isPlaying ? Math.max(minHeight, shaped * maxHeight) : minHeight + (i % 5 === 0 ? 2 : 0);
-        return (
-          <div
-            key={i}
-            className="w-[3px] rounded-[2px] will-change-transform"
-            style={{
-              height: `${height}px`,
-              background: isPlaying
-                ? "linear-gradient(180deg, rgba(255,255,255,0.98) 0%, rgba(214,233,255,0.95) 55%, rgba(149,181,220,0.95) 100%)"
-                : "linear-gradient(180deg, rgba(214,233,255,0.55) 0%, rgba(149,181,220,0.45) 100%)",
-              boxShadow: isPlaying ? "0 0 10px rgba(216,234,255,0.35)" : "none",
-              opacity: isPlaying ? 0.45 + shaped * 0.55 : 0.26,
-              transform: 'translateZ(0)',
-              transition: 'height 0.07s linear, opacity 0.07s linear',
-            }}
-          />
-        );
-      })}
-      <div
-        aria-hidden="true"
-        className={[
-          "absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 h-2.5 w-2.5 rounded-full border",
-          isPlaying
-            ? "border-white/80 bg-white/60 shadow-[0_0_14px_rgba(216,234,255,0.7)]"
-            : "border-white/35 bg-white/20",
-        ].join(" ")}
-      />
-      </div>
-    </div>
-  );
-}
-
-/**
  * Currently Playing Song Display
  */
 export function CurrentSongDisplay({

@@ -73,6 +73,16 @@ docker compose -f docker-compose.vps.yml ps
 docker compose -f docker-compose.vps.yml logs -f backend
 ```
 
+## 4.1) Create admin user (first deploy)
+
+Run once after containers are up:
+
+```bash
+docker compose -f docker-compose.vps.yml --env-file .env.vps exec backend sh -lc "ADMIN_EMAIL=admin@goldenpearlradio.com ADMIN_USERNAME=admin ADMIN_PASSWORD='CHANGE_ME_STRONG' ADMIN_FULL_NAME='Golden Pearl Admin' npm run db:create-admin"
+```
+
+Then log in at `/login` with that email/password.
+
 ## 5) Update deployment
 
 ```bash
