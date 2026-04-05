@@ -68,19 +68,20 @@ export function useAudioContext(audioElement: HTMLAudioElement | null) {
  * Hook to manage audio playback (play/pause, volume, mute)
  */
 export function useAudioPlayback(
-  audioElement: HTMLAudioElement | null,
+  audioRef: React.MutableRefObject<HTMLAudioElement | null>,
   audioContextRef: React.MutableRefObject<AudioContext | null>
 ) {
   const userHasInteractedRef = useRef(false);
   const pendingPlayRef = useRef(false);
 
   const play = useCallback(async () => {
-    if (!audioElement) return;
+    const audioElement = audioRef.current;
+    if (!audioElement) return false;
 
     try {
-      // Resume audio context first
+      // Resume context in parallel and call play immediately to preserve user-gesture playback on mobile.
       if (audioContextRef.current?.state === 'suspended') {
-        await audioContextRef.current.resume();
+        void audioContextRef.current.resume().catch(() => {});
       }
 
       await audioElement.play();
@@ -102,43 +103,46 @@ export function useAudioPlayback(
       console.error('Play failed:', err);
       return false;
     }
-  }, [audioElement, audioContextRef]);
+  }, [audioRef, audioContextRef]);
 
   const pause = useCallback(() => {
+    const audioElement = audioRef.current;
     if (audioElement) {
       audioElement.pause();
     }
-  }, [audioElement]);
+  }, [audioRef]);
 
   const setVolume = useCallback((volume: number) => {
+    const audioElement = audioRef.current;
     if (audioElement) {
       audioElement.volume = volume / 100;
     }
-  }, [audioElement]);
+  }, [audioRef]);
 
   const setMuted = useCallback((muted: boolean) => {
+    const audioElement = audioRef.current;
     if (audioElement) {
       audioElement.muted = muted;
     }
-  }, [audioElement]);
+  }, [audioRef]);
 
   const setupUserInteractionListener = useCallback(() => {
     const enableAutoplay = async () => {
-      if (!userHasInteractedRef.current && pendingPlayRef.current && audioElement) {
-        userHasInteractedRef.current = true;
-        try {
-          await audioElement.play();
-          pendingPlayRef.current = false;
-          console.log('Autoplay enabled after user interaction');
-        } catch (err) {
-          console.log('Play failed even after interaction:', err);
-        }
+      const audioElement = audioRef.current;
+      userHasInteractedRef.current = true;
+      if (!pendingPlayRef.current || !audioElement) return;
+      try {
+        await audioElement.play();
+        pendingPlayRef.current = false;
+        console.log('Autoplay enabled after user interaction');
+      } catch (err) {
+        console.log('Play failed even after interaction:', err);
       }
     };
 
-    const events = ['click', 'touchstart', 'keydown'];
+    const events = ['pointerdown', 'touchstart', 'click', 'keydown'];
     events.forEach(event => {
-      document.addEventListener(event, enableAutoplay, { once: true });
+      document.addEventListener(event, enableAutoplay);
     });
 
     return () => {
@@ -146,7 +150,7 @@ export function useAudioPlayback(
         document.removeEventListener(event, enableAutoplay);
       });
     };
-  }, [audioElement]);
+  }, [audioRef]);
 
   return {
     play,

@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+﻿import { useQuery } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
 import type { Advertisement, Product } from "@/types/api-models";
 import { api } from "@/lib/api-client";
@@ -66,6 +66,9 @@ export default function Home() {
   const heroSubtitle = "The Media Network for Music News and Entertainment.";
   return (
     <div className={["min-h-screen", introActive ? "invisible pointer-events-none" : ""].join(" ")}>
+      <div className="fixed left-3 top-3 z-[70] rounded-md bg-red-600 px-3 py-2 font-gp-sans text-[0.62rem] font-semibold uppercase tracking-[0.14em] text-white shadow-[0_8px_24px_rgba(220,38,38,0.45)]">
+       Test Run
+      </div>
       <div className="px-4 pt-10 md:pt-12">
         <section className="text-center px-2">
           <div className="flex items-center justify-center gap-4 mb-6 font-gp-sans text-[0.7rem] tracking-[0.3em] uppercase text-white/75">
@@ -100,7 +103,7 @@ export default function Home() {
                   className="pointer-events-none absolute inset-0 border border-white/25 rounded-[1.5rem]"
                 />
                 <div className="px-7 py-6">
-                  <div className="flex items-center gap-6">
+                  <div className="flex items-center justify-between gap-4 sm:gap-6">
                     <VolumeControl
                       volume={volume}
                       isMuted={isMuted}

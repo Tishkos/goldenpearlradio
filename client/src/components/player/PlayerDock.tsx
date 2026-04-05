@@ -165,11 +165,11 @@ export default function PlayerDock() {
     ? "text-[color:var(--gp-white)]/75 hover:text-[var(--gp-gold-bright)] hover:bg-white/5"
     : "";
   const playBtnClass = isAdminTheme
-    ? "bg-[var(--gp-gold)] hover:bg-[var(--gp-gold-bright)] text-[var(--gp-navy-deep)]"
-    : "bg-orange-500 hover:bg-orange-600 text-white";
+    ? "bg-[var(--gp-gold)] hover:bg-[var(--gp-gold-bright)] text-[var(--gp-navy-deep)] rounded-full"
+    : "bg-red-600 hover:bg-red-700 text-white rounded-full";
   const spinnerClass = isAdminTheme
     ? "w-4 h-4 border-2 border-[var(--gp-border-gold)]/40 border-t-[var(--gp-gold)] rounded-full animate-spin"
-    : "w-4 h-4 border-2 border-gray-300 border-t-orange-500 rounded-full animate-spin";
+    : "w-4 h-4 border-2 border-gray-300 border-t-red-600 rounded-full animate-spin";
   const timeClass = isAdminTheme
     ? "text-xs text-[var(--gp-gold-bright)] font-mono"
     : "text-xs text-gray-500 dark:text-neutral-400 font-mono";

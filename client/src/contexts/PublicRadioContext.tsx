@@ -219,17 +219,6 @@ export function PublicRadioProvider({ children }: { children: React.ReactNode })
     });
   }, []);
 
-  const fetchLatestStreamState = useCallback(async (): Promise<StreamCurrentResponse | null> => {
-    try {
-      const streamServerUrl = import.meta.env.VITE_STREAM_SERVER_URL || "http://127.0.0.1:3001";
-      const res = await fetch(`${streamServerUrl}${API_ENDPOINTS.STREAM_CURRENT}`);
-      if (!res.ok) return null;
-      return (await res.json()) as StreamCurrentResponse;
-    } catch {
-      return null;
-    }
-  }, []);
-
   // IMPORTANT: URL can repeat across adjacent schedule items; key off item id + url.
   const lastStreamKeyRef = useRef<string | null>(null);
   const hasSyncedRef = useRef<SyncMarkers>({});
@@ -242,7 +231,7 @@ export function PublicRadioProvider({ children }: { children: React.ReactNode })
   const missingLiveSinceRef = useRef<number | null>(null);
 
   const audioContextRef = useRef<AudioContext | null>(null);
-  const playback = useAudioPlayback(audioRef.current, audioContextRef);
+  const playback = useAudioPlayback(audioRef, audioContextRef);
   const setupUserInteractionListener = playback.setupUserInteractionListener;
   const playAudio = playback.play;
   const pauseAudio = playback.pause;
@@ -751,7 +740,6 @@ export function PublicRadioProvider({ children }: { children: React.ReactNode })
       const handleLoadedMetadata = async () => {
         if (!hasSyncedRef.current[currentStreamKey] && audioFilePosition > 0) {
           hasSyncedRef.current[currentStreamKey] = true;
-          audio.pause();
           audio.currentTime = Math.min(audioFilePosition, Math.max(0, audio.duration - 0.1));
           await waitForSeeked(audio, 800);
           lastPositionSampleRef.current = {
@@ -806,15 +794,40 @@ export function PublicRadioProvider({ children }: { children: React.ReactNode })
     const audio = audioRef.current;
     if (!audio) return;
 
-    const handleEnded = () => {
-      if (currentSong?.playing) {
-        queryClient.invalidateQueries({ queryKey: QUERY_KEYS.STREAM_CURRENT });
+    const handleEnded = async () => {
+      if (!currentSong?.playing) {
+        return;
       }
+
+      // Start the next scheduled item immediately to avoid dead air between tracks.
+      const immediateNextUrl = resolveStreamUrl(currentSong.next?.url ?? null);
+      const stableNextUrl = normalizeResolvedUrl(immediateNextUrl);
+      if (immediateNextUrl && stableNextUrl && currentSong.next) {
+        const nextStreamKey = `${currentSong.next.id}:${stableNextUrl}`;
+        lastStreamKeyRef.current = nextStreamKey;
+        hasSyncedRef.current[nextStreamKey] = true;
+        lastPositionSampleRef.current = null;
+
+        audio.src = immediateNextUrl;
+        audio.playbackRate = 1.0;
+        audio.defaultPlaybackRate = 1.0;
+        audio.load();
+
+        const didPlay = await playAudio();
+        if (didPlay) {
+          setIsPlaying(true);
+        } else {
+          pendingPlayRef.current = true;
+        }
+      }
+
+      // Keep state aligned with backend timeline after the immediate handoff.
+      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.STREAM_CURRENT });
     };
 
     audio.addEventListener("ended", handleEnded);
     return () => audio.removeEventListener("ended", handleEnded);
-  }, [currentSong, queryClient]);
+  }, [currentSong, normalizeResolvedUrl, pendingPlayRef, playAudio, queryClient, resolveStreamUrl]);
 
   useEffect(() => {
     setAudioVolume(volume);
@@ -833,15 +846,14 @@ export function PublicRadioProvider({ children }: { children: React.ReactNode })
         return;
       }
 
-      // Manual play always re-syncs from server so resume follows live timeline time.
-      const latest = await fetchLatestStreamState();
-      const candidate = latest?.playing && latest.current?.url ? latest : effectiveStreamData;
+      const candidate = effectiveStreamData;
       const latestCurrent = candidate?.current;
-      const isLiveNow = Boolean(candidate?.playing && latestCurrent?.url);
+      const isLiveNow = Boolean(candidate?.playing && latestCurrent?.url && isPublicRoute);
       const urlToPlay = resolveStreamUrl(isLiveNow ? latestCurrent?.url : null);
       const stableUrlToPlay = normalizeResolvedUrl(urlToPlay);
       if (!urlToPlay || !stableUrlToPlay) {
         setIsPlaying(false);
+        void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.STREAM_CURRENT });
         return;
       }
       const audio = audioRef.current;
@@ -860,11 +872,8 @@ export function PublicRadioProvider({ children }: { children: React.ReactNode })
           audio.src = urlToPlay;
           audio.playbackRate = 1.0;
           audio.defaultPlaybackRate = 1.0;
-          audio.load();
-          const onCanPlay = async () => {
-            audio.removeEventListener("canplay", onCanPlay);
-            audio.playbackRate = 1.0;
-            audio.defaultPlaybackRate = 1.0;
+
+          const onLoadedMetadata = () => {
             if (targetAudioPosition > 0) {
               try {
                 const cap = Number.isFinite(audio.duration) && audio.duration > 0
@@ -875,10 +884,12 @@ export function PublicRadioProvider({ children }: { children: React.ReactNode })
                 // no-op
               }
             }
-            const didPlay = await playAudio();
-            if (didPlay) setIsPlaying(true);
           };
-          audio.addEventListener("canplay", onCanPlay, { once: true });
+          audio.addEventListener("loadedmetadata", onLoadedMetadata, { once: true });
+
+          audio.load();
+          const didPlay = await playAudio();
+          if (didPlay) setIsPlaying(true);
           return;
         }
 
@@ -908,8 +919,8 @@ export function PublicRadioProvider({ children }: { children: React.ReactNode })
     pauseAudio,
     playAudio,
     resolveStreamUrl,
-    fetchLatestStreamState,
     effectiveStreamData,
+    queryClient,
   ]);
 
   // Strict schedule behavior: if backend says there's no current live item, stop local playback.

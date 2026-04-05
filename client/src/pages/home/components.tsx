@@ -204,7 +204,7 @@ export function PowerControl({
 }) {
   const canPlay = hasPlayableContent;
   return (
-    <div className="flex flex-col items-center">
+    <div className="flex flex-col items-center min-w-[4.5rem]">
       <div className="font-gp-sans text-[0.55rem] tracking-[0.2em] uppercase text-white/80 mb-2">
         Power
       </div>
@@ -212,17 +212,17 @@ export function PowerControl({
         onClick={onTogglePlayPause}
         disabled={!canPlay}
         className={[
-          "relative w-12 h-12 md:w-14 md:h-14 rounded-full flex items-center justify-center",
+          "relative w-14 h-14 md:w-16 md:h-16 rounded-full flex items-center justify-center touch-manipulation",
           "transition-all duration-300 will-change-transform hover:scale-105 active:scale-95",
           canPlay
-            ? "border border-white/40 text-white/90 hover:bg-white/20 hover:text-white"
-            : "border border-white/25 opacity-40 cursor-not-allowed text-white/60",
+            ? "bg-red-600 border border-red-300/70 text-white shadow-[0_10px_30px_rgba(220,38,38,0.5)] hover:bg-red-500 active:bg-red-700"
+            : "bg-red-900/40 border border-red-300/35 opacity-40 cursor-not-allowed text-white/70",
         ].join(" ")}
         aria-label={isPlaying ? "Pause" : "Play"}
       >
         <span
           aria-hidden="true"
-          className="absolute -inset-1 rounded-full border border-white/25 opacity-35"
+          className="absolute -inset-1 rounded-full border border-red-200/60 opacity-60"
         />
         {isPlaying && canPlay ? (
           <Pause
