@@ -31,7 +31,7 @@ export default function Footer({ variant = "default" }: FooterProps) {
               </div>
             </div>
             <p className={["font-gp-serif text-[0.98rem] italic leading-relaxed", isPublicOcean ? "text-white/90" : "text-[color:var(--gp-white)]/90"].join(" ")}>
-              The ultimate audio companion for your Dubai/Georgia experience.
+              The ultimate audio companion for your Dubai/Tbilisi experience.
             </p>
             <div className="flex gap-2.5 mt-4">
               <a
@@ -140,7 +140,7 @@ export default function Footer({ variant = "default" }: FooterProps) {
             <div className={["space-y-2.5 text-[0.95rem]", isPublicOcean ? "text-white" : "text-[color:var(--gp-white)]"].join(" ")}>
               <div className="flex items-start gap-2">
                 <MapPin className={["h-4 w-4 mt-1", isPublicOcean ? "text-white/80" : "text-[color:var(--gp-gold-dim)]"].join(" ")} />
-                <span>Dubai/Georgia</span>
+                <span>Dubai/Tbilisi</span>
               </div>
               <div className="flex items-center gap-2">
                 <Mail className={["h-4 w-4", isPublicOcean ? "text-white/80" : "text-[color:var(--gp-gold-dim)]"].join(" ")} />
@@ -177,7 +177,7 @@ export default function Footer({ variant = "default" }: FooterProps) {
               </Link>
             )}
             <span className={["font-gp-sans text-[0.7rem] uppercase tracking-[0.2em]", isPublicOcean ? "text-white/90" : "text-[color:var(--gp-white)]/90"].join(" ")}>
-              Dubai/Georgia
+              Dubai/Tbilisi
             </span>
           </div>
         </div>
