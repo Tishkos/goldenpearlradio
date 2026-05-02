@@ -540,6 +540,7 @@ class RadioStreamer {
   private showTime = 0; // Master clock for the current show in seconds
   private audioEngineInterval: NodeJS.Timeout | null = null;
   private showCheckInterval: NodeJS.Timeout | null = null; // Periodically check for new shows
+  private nextAudioFrameTime: number | null = null;
   
   private currentShow: any = null; // Holds the full scheduled_show object
   private timelineItems: TimelineItem[] = [];
@@ -636,6 +637,7 @@ class RadioStreamer {
 
     // Clear state
     this.showTime = 0;
+    this.nextAudioFrameTime = null;
     this.audioCache.clear();
     this.audioLoadPromises.clear();
     this.timelineItems = [];
@@ -792,18 +794,41 @@ class RadioStreamer {
   
   // This function runs every TICK_INTERVAL_MS
   // All clients receive the same synchronized stream based on real time
-  private async audioEngineTick() {
+  private audioEngineTick() {
     if (!this.mainFfmpegProcess || !this.isPlaying || !this.mainFfmpegProcess.stdin) return;
 
-    // Calculate showTime based on current time of day (for real-time synchronization)
-    // This ensures users joining at any time hear the correct part of the playlist
-    // e.g., if it's 6:00 PM (18:00), showTime = 18*3600 = 64800 seconds
-    if (this.showStartTime) {
-      this.showTime = getStationTimeOfDaySeconds(new Date());
-    } else {
-      // No timeline loaded - play silence but keep stream running
-      this.showTime = 0;
+    const tickSeconds = TICK_INTERVAL_MS / 1000;
+    const targetShowTime = this.showStartTime ? getStationTimeOfDaySeconds(new Date()) : 0;
+
+    if (!this.showStartTime) {
+      this.nextAudioFrameTime = null;
+      this.writeAudioFrameAt(0);
+      return;
     }
+
+    // Keep the encoded stream continuous. If a timer fires late, write the missing
+    // 100ms frames instead of jumping the source clock forward and creating stutter.
+    if (
+      this.nextAudioFrameTime === null ||
+      targetShowTime < this.nextAudioFrameTime - 5 ||
+      targetShowTime - this.nextAudioFrameTime > 5
+    ) {
+      this.nextAudioFrameTime = targetShowTime;
+    }
+
+    const lagSeconds = Math.max(0, targetShowTime - this.nextAudioFrameTime);
+    const chunksToWrite = Math.min(6, Math.max(1, Math.floor(lagSeconds / tickSeconds) + 1));
+
+    for (let i = 0; i < chunksToWrite; i++) {
+      this.writeAudioFrameAt(this.nextAudioFrameTime);
+      this.nextAudioFrameTime += tickSeconds;
+    }
+  }
+
+  private writeAudioFrameAt(showTime: number) {
+    if (!this.mainFfmpegProcess || !this.mainFfmpegProcess.stdin) return;
+
+    this.showTime = showTime;
 
     // Find all items that should be playing at the current showTime
     const activeItems = this.timelineItems.filter(item => 
