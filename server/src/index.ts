@@ -753,7 +753,9 @@ class RadioStreamer {
                         'Transfer-Encoding': 'chunked',
                         'Access-Control-Allow-Origin': '*',
                         'Access-Control-Allow-Headers': 'Range',
+                        'X-Accel-Buffering': 'no',
                     });
+                    client.response.flushHeaders?.();
                 }
                 // Write the same chunk to all clients - synchronized broadcast
                 if (client.response.writable && !client.response.destroyed) {
