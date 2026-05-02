@@ -544,6 +544,7 @@ class RadioStreamer {
   private currentShow: any = null; // Holds the full scheduled_show object
   private timelineItems: TimelineItem[] = [];
   private audioCache = new Map<string, Int16Array>(); // Cache for decoded raw audio data, keyed by audio URL
+  private audioLoadPromises = new Map<string, Promise<Int16Array | null>>();
   private showStartTime: Date | null = null; // When the current show started (for synchronization)
   private lastDebugLogTime: number = 0; // Track last debug log time to avoid spam
 
@@ -636,6 +637,7 @@ class RadioStreamer {
     // Clear state
     this.showTime = 0;
     this.audioCache.clear();
+    this.audioLoadPromises.clear();
     this.timelineItems = [];
     this.currentShow = null;
     this.showStartTime = null;
@@ -1044,9 +1046,7 @@ class RadioStreamer {
         if (!audioData || audioData.length === 0) {
           // Audio not loaded yet - try to load it immediately
           console.warn(`[Station ${this.stationId}] Audio not cached for "${item.contentTitle}" (${audioUrlToUse}), attempting to load...`);
-          this.fetchAndDecodeAudio(audioUrlToUse).catch(err => {
-            console.error(`[Station ${this.stationId}] Failed to load audio for "${item.contentTitle}":`, err);
-          });
+          this.queueAudioLoad(audioUrlToUse, item.contentTitle);
           continue; // Skip if audio hasn't been decoded yet
         }
 
@@ -1170,15 +1170,7 @@ class RadioStreamer {
           // Audio not loaded yet - try to load it immediately
           console.warn(`[Station ${this.stationId}] ⚠️ Audio not cached for overlay "${item.contentTitle}" (${item.audioUrl}), attempting to load...`);
           // Load audio asynchronously but don't wait - it will be available next tick
-          this.fetchAndDecodeAudio(item.audioUrl).then(decoded => {
-            if (decoded) {
-              console.log(`[Station ${this.stationId}] ✅ Successfully loaded overlay audio for "${item.contentTitle}" - will play on next tick`);
-            } else {
-              console.error(`[Station ${this.stationId}] ❌ Failed to decode overlay audio for "${item.contentTitle}"`);
-            }
-          }).catch(err => {
-            console.error(`[Station ${this.stationId}] ❌ Failed to load audio for overlay "${item.contentTitle}":`, err);
-          });
+          this.queueAudioLoad(item.audioUrl, item.contentTitle);
           continue; // Skip this tick if audio hasn't been decoded yet
         }
 
@@ -1242,25 +1234,43 @@ class RadioStreamer {
     );
 
     for (const item of upcomingItems) {
-        // Use a placeholder to prevent re-fetching while in progress
         if (!item.audioUrl) continue;
-        this.audioCache.set(item.audioUrl, new Int16Array(0)); 
-        
         console.log(`[Station ${this.stationId}] Pre-fetching audio for: "${item.contentTitle}"`);
-        this.fetchAndDecodeAudio(item.audioUrl)
-            .then(decodedBuffer => {
-                if (decodedBuffer && item.audioUrl) {
-                    this.audioCache.set(item.audioUrl, decodedBuffer);
-                    console.log(`[Station ${this.stationId}] Audio buffered for: "${item.contentTitle}"`);
-                } else {
-                    if (item.audioUrl) this.audioCache.delete(item.audioUrl); // Remove placeholder on failure
-                }
-            })
-            .catch(err => {
-                console.error(`[Station ${this.stationId}] Failed to buffer audio for ${item.audioUrl}:`, err);
-                if (item.audioUrl) this.audioCache.delete(item.audioUrl);
-            });
+        this.queueAudioLoad(item.audioUrl, item.contentTitle);
     }
+  }
+
+  private queueAudioLoad(audioUrl: string, label: string) {
+    if (this.audioLoadPromises.has(audioUrl)) return;
+
+    const cached = this.audioCache.get(audioUrl);
+    if (cached && cached.length > 0) return;
+
+    // Placeholder prevents a cold listener from spawning a decoder every tick.
+    this.audioCache.set(audioUrl, new Int16Array(0));
+
+    const loadPromise = this.fetchAndDecodeAudio(audioUrl)
+      .then(decodedBuffer => {
+        if (decodedBuffer && decodedBuffer.length > 0) {
+          this.audioCache.set(audioUrl, decodedBuffer);
+          console.log(`[Station ${this.stationId}] Audio buffered for: "${label}"`);
+          return decodedBuffer;
+        }
+
+        this.audioCache.delete(audioUrl);
+        console.error(`[Station ${this.stationId}] Failed to decode audio for "${label}" (${audioUrl})`);
+        return null;
+      })
+      .catch(err => {
+        this.audioCache.delete(audioUrl);
+        console.error(`[Station ${this.stationId}] Failed to buffer audio for "${label}" (${audioUrl}):`, err);
+        return null;
+      })
+      .finally(() => {
+        this.audioLoadPromises.delete(audioUrl);
+      });
+
+    this.audioLoadPromises.set(audioUrl, loadPromise);
   }
 
   // Fetches an audio file and uses a temporary FFmpeg process to decode it to raw PCM data
@@ -1781,6 +1791,8 @@ app.get('/api/stream/debug', async (req: Request, res: Response) => {
     
     const showTime = (streamer as any).showTime || 0;
     const timelineItems = (streamer as any).timelineItems || [];
+    const audioCache = (streamer as any).audioCache as Map<string, Int16Array> | undefined;
+    const audioLoadPromises = (streamer as any).audioLoadPromises as Map<string, Promise<Int16Array | null>> | undefined;
     
     // Find active items
     const activeItems = timelineItems.filter((item: any) => 
@@ -1833,6 +1845,8 @@ app.get('/api/stream/debug', async (req: Request, res: Response) => {
     res.json({
       showTime: showTime.toFixed(1),
       currentTime: new Date().toISOString(),
+      audioCacheSize: audioCache?.size || 0,
+      audioLoadsInProgress: audioLoadPromises?.size || 0,
       activeItems: activeItems.length,
       parentItems: parentItems.length,
       trackItems: trackItems.length,
@@ -1845,6 +1859,8 @@ app.get('/api/stream/debug', async (req: Request, res: Response) => {
         contentType: p.contentType,
         time: `${p.calculatedStartTime.toFixed(1)}s-${p.calculatedEndTime.toFixed(1)}s`,
         audioUrl: p.audioUrl ? 'yes' : 'NO',
+        audioCached: Boolean(p.audioUrl && audioCache?.get(p.audioUrl)?.length),
+        audioLoading: Boolean(p.audioUrl && audioLoadPromises?.has(p.audioUrl)),
         activeOverlays: p.activeOverlays
       })),
       allOverlays: overlayItems.map((o: any) => ({
