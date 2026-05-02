@@ -46,8 +46,11 @@ router.get('/current', async (req: Request, res: Response) => {
     const parts = getPartsInTimeZone(now, stationTimeZone);
     const todayDateKey = `${parts.year}-${parts.month}-${parts.day}`;
 
-    // Calculate current time of day in seconds since midnight (station timezone)
-    const currentTimeOfDay = (parts.hour * 3600) + (parts.minute * 60) + parts.second;
+    // Calculate current time of day in seconds since midnight (station timezone).
+    // Intl.DateTimeFormat with hour12:false can return hour=24 at midnight instead
+    // of hour=0 in some environments — clamp it to 0-23 to avoid going past 86400s.
+    const safeHour = parts.hour % 24;
+    const currentTimeOfDay = (safeHour * 3600) + (parts.minute * 60) + parts.second;
     const formatHms = (seconds: number) => {
       const h = Math.floor(seconds / 3600);
       const m = Math.floor((seconds % 3600) / 60);
