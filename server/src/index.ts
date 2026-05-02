@@ -26,6 +26,45 @@ const TICK_INTERVAL_MS = 100; // The "frame rate" of the audio engine
 const SAMPLES_PER_TICK = Math.floor(AUDIO_FORMAT.sampleRate * (TICK_INTERVAL_MS / 1000));
 const BYTES_PER_TICK = SAMPLES_PER_TICK * AUDIO_FORMAT.channels * AUDIO_FORMAT.byteDepth;
 const BUFFER_AHEAD_SECONDS = 15; // Pre-fetch and decode audio 15 seconds before it's needed
+const STREAM_TIMEZONE = process.env.STREAM_TIMEZONE || 'Europe/Budapest';
+
+function getStationParts(date: Date, timeZone = STREAM_TIMEZONE) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).formatToParts(date);
+
+  const map: Record<string, string> = {};
+  for (const part of parts) {
+    if (part.type !== 'literal') map[part.type] = part.value;
+  }
+
+  return {
+    year: map.year,
+    month: map.month,
+    day: map.day,
+    hour: Number(map.hour),
+    minute: Number(map.minute),
+    second: Number(map.second),
+  };
+}
+
+function getStationDateKey(date: Date, timeZone = STREAM_TIMEZONE): string {
+  const parts = getStationParts(date, timeZone);
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+function getStationTimeOfDaySeconds(date: Date, timeZone = STREAM_TIMEZONE): number {
+  const parts = getStationParts(date, timeZone);
+  const safeHour = parts.hour % 24;
+  return (safeHour * 3600) + (parts.minute * 60) + parts.second;
+}
 
 // --- FFmpeg resolution (Windows-friendly) ---
 function resolveFfmpegPath(): string | null {
@@ -758,10 +797,7 @@ class RadioStreamer {
     // This ensures users joining at any time hear the correct part of the playlist
     // e.g., if it's 6:00 PM (18:00), showTime = 18*3600 = 64800 seconds
     if (this.showStartTime) {
-      const now = new Date();
-      // Calculate current time of day in seconds since midnight
-      const currentTimeOfDay = (now.getHours() * 3600) + (now.getMinutes() * 60) + now.getSeconds();
-      this.showTime = currentTimeOfDay;
+      this.showTime = getStationTimeOfDaySeconds(new Date());
     } else {
       // No timeline loaded - play silence but keep stream running
       this.showTime = 0;
@@ -1311,19 +1347,8 @@ class RadioStreamer {
     const stationIdNum = parseInt(this.stationId, 10);
     
     // Get today's date in YYYY-MM-DD format (station timezone)
-    const stationTimeZone =
-      process.env.STREAM_TIMEZONE || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
-    const parts = new Intl.DateTimeFormat('en-CA', {
-      timeZone: stationTimeZone,
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-    }).formatToParts(now);
-    const map: Record<string, string> = {};
-    for (const p of parts) {
-      if (p.type !== 'literal') map[p.type] = p.value;
-    }
-    const todayDateKey = `${map.year}-${map.month}-${map.day}`;
+    const stationTimeZone = STREAM_TIMEZONE;
+    const todayDateKey = getStationDateKey(now, stationTimeZone);
     
     // Get or create default show for timeline items (with host included)
     let defaultShow = await prisma.show.findFirst({
@@ -1377,20 +1402,18 @@ class RadioStreamer {
     if (todayItems.length === 0) {
       console.warn(`[Station ${this.stationId}] No timeline items found for today (${todayDateKey}).`);
       this.timelineItems = [];
-      this.showStartTime = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0); // Start of today
-      this.showTime = Math.max(0, (Date.now() - this.showStartTime.getTime()) / 1000);
+      this.showStartTime = now;
+      this.showTime = getStationTimeOfDaySeconds(now, stationTimeZone);
       return;
     }
     
     console.log(`[Station ${this.stationId}] Found ${todayItems.length} timeline items for today (${todayDateKey})`);
     
-    // Set timeline start time to beginning of today (00:00:00)
-    // This allows us to calculate showTime as seconds since midnight
-    this.showStartTime = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
+    this.showStartTime = now;
     
     // Calculate current time of day in seconds (e.g., 6:00 PM = 18*3600 = 64800 seconds)
     // This ensures the stream plays from the correct position based on the current time
-    const currentTimeOfDay = (now.getHours() * 3600) + (now.getMinutes() * 60) + now.getSeconds();
+    const currentTimeOfDay = getStationTimeOfDaySeconds(now, stationTimeZone);
     this.showTime = currentTimeOfDay;
     
     // Get hostId from the default show for advertisements/news
@@ -1850,23 +1873,23 @@ app.get('/api/now-playing', async (req: Request, res: Response) => {
   try {
     const streamUrl = `${API_BASE_URL}/stream`;
     const currentRes = await fetch(`${API_BASE_URL}/api/stream/current`);
-    const data = currentRes.ok ? (await currentRes.json()) as { playing?: boolean; current?: { title?: string }; next?: { title?: string }; message?: string } : null;
-    const playing = data?.playing === true;
+    const data = currentRes.ok ? (await currentRes.json()) as { playing?: boolean; current?: { title?: string; url?: string }; next?: { title?: string }; message?: string } : null;
+    const playing = data?.playing === true && Boolean(data.current?.url);
     const title = data?.current?.title ?? 'Live';
     const subtitle = data?.next?.title ?? (playing ? null : data?.message ?? null);
     res.json({
-      hasBroadcast: true,
-      streamUrl,
+      hasBroadcast: playing,
+      streamUrl: playing ? streamUrl : undefined,
       title: playing ? title : 'Live',
       subtitle: subtitle || undefined,
     });
   } catch (error: any) {
     console.error('Error in /api/now-playing:', error);
     res.json({
-      hasBroadcast: true,
-      streamUrl: `${API_BASE_URL}/stream`,
+      hasBroadcast: false,
+      streamUrl: undefined,
       title: 'Live',
-      subtitle: undefined,
+      subtitle: 'Unable to confirm current broadcast.',
     });
   }
 });
