@@ -84,6 +84,19 @@ export default function Home() {
           <p className="mt-4 mx-auto max-w-[560px] font-gp-sans text-[1.15rem] tracking-[0.02em] text-white/85">
             {heroSubtitle}
           </p>
+
+          <a
+            href="/goldenpearl.apk"
+            download="goldenpearl.apk"
+            className="mt-7 inline-flex rounded-[1.4rem] transition-transform duration-200 hover:scale-[1.03] focus:outline-none focus:ring-2 focus:ring-white/70 focus:ring-offset-2 focus:ring-offset-black"
+            aria-label="Download Golden Pearl Radio Android APK"
+          >
+            <img
+              src="/downloadAPK.png"
+              alt="Download Golden Pearl Radio app for Android"
+              className="h-14 w-auto sm:h-16"
+            />
+          </a>
         </section>
 
         <div className="max-w-[1280px] mx-auto pt-12 pb-16 grid grid-cols-1 lg:grid-cols-12 gap-6 items-start lg:items-stretch">
