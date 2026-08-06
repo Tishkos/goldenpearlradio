@@ -9,6 +9,9 @@ vite.config.ts.*
 .env
 .env.local
 
+# Server credentials - NEVER commit
+vps.md
+
 # Keep local media/content out of GitHub
 uploads/*
 !uploads/.gitkeep

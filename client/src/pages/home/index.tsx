@@ -1,4 +1,5 @@
-﻿import { useQuery } from "@tanstack/react-query";
+﻿import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
 import type { Advertisement, Product } from "@/types/api-models";
 import { api } from "@/lib/api-client";
@@ -34,6 +35,7 @@ export default function Home() {
     togglePlayPause,
   } = usePublicRadio();
   const { introActive } = useIntro();
+  const [newsImageFailed, setNewsImageFailed] = useState(false);
   const silentScheduledAdvertisement = Boolean(
     currentSong?.scheduledCurrent?.contentType === "ADVERTISEMENT" &&
     !currentSong?.scheduledCurrent?.hasAudio
@@ -154,9 +156,20 @@ export default function Home() {
           </section>
 
           <section className="relative z-20 lg:col-span-4 order-3">
-            <div className="font-gp-sans text-[0.65rem] font-medium tracking-[0.2em] uppercase text-white/90 mb-4 flex items-center gap-2">
-              <Newspaper className="h-4 w-4" />
-              News
+            <div className="mb-4">
+              {newsImageFailed ? (
+                <span className="font-gp-sans text-[0.65rem] font-medium tracking-[0.2em] uppercase text-white/90 flex items-center gap-2">
+                  <Newspaper className="h-4 w-4" />
+                  News
+                </span>
+              ) : (
+                <img
+                  src="/news.jpeg"
+                  alt="News"
+                  className="w-full h-auto rounded-lg"
+                  onError={() => setNewsImageFailed(true)}
+                />
+              )}
             </div>
             <NewsSidebar variant="blocks" limit={3} />
           </section>
