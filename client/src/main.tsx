@@ -10,7 +10,7 @@ document.head.appendChild(fontStylesheet);
 
 // Add page title
 const titleElement = document.createElement('title');
-titleElement.textContent = 'Golden Pearl Radio Dubai';
+titleElement.textContent = 'Golden Pearl Radio International';
 document.head.appendChild(titleElement);
 
 // Add favicon

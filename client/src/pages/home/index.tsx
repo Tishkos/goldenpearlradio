@@ -80,7 +80,7 @@ export default function Home() {
           </div>
 
           <h1 className="font-gp-display font-bold leading-[1.15] tracking-[-0.01em] text-[clamp(2.4rem,5vw,3.8rem)] text-white">
-            Golden Pearl Radio <span className="text-red-500">Dubai</span>
+            Golden Pearl Radio <span className="text-red-500">International</span>
           </h1>
 
           <p className="mt-4 mx-auto max-w-[560px] font-gp-sans text-[1.15rem] tracking-[0.02em] text-white/85">
@@ -163,12 +163,7 @@ export default function Home() {
                   News
                 </span>
               ) : (
-                <img
-                  src="/news.jpeg"
-                  alt="News"
-                  className="w-full h-auto rounded-lg"
-                  onError={() => setNewsImageFailed(true)}
-                />
+                <NewsStoryFlipCard onImageError={() => setNewsImageFailed(true)} />
               )}
             </div>
             <NewsSidebar variant="blocks" limit={3} />
@@ -203,6 +198,85 @@ export default function Home() {
           <div className="glass-card p-6">
             <SongOfTheWeek />
           </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function NewsStoryFlipCard({ onImageError }: { onImageError: () => void }) {
+  const [flipped, setFlipped] = useState(false);
+
+  const toggle = () => setFlipped((prev) => !prev);
+
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      aria-pressed={flipped}
+      aria-label={flipped ? "Show the news image" : "Read the story behind Poets & Writers"}
+      onClick={toggle}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          toggle();
+        }
+      }}
+      className="group cursor-pointer select-none outline-none [perspective:1400px] focus-visible:ring-2 focus-visible:ring-white/70 rounded-lg"
+    >
+      <div
+        className={[
+          "relative w-full transition-transform duration-700 [transform-style:preserve-3d] motion-reduce:duration-0",
+          flipped ? "[transform:rotateY(180deg)]" : "",
+        ].join(" ")}
+      >
+        {/* Front: the news image */}
+        <div className="[backface-visibility:hidden]">
+          <img
+            src="/news.jpeg"
+            alt="News"
+            className="w-full h-auto rounded-lg"
+            onError={onImageError}
+            draggable={false}
+          />
+          <span
+            className={[
+              "pointer-events-none absolute bottom-3 right-3 rounded-full bg-black/60 px-3 py-1.5",
+              "font-gp-sans text-[0.6rem] font-semibold uppercase tracking-[0.16em] text-white/90 backdrop-blur-sm",
+              "opacity-0 translate-y-1 transition-all duration-300 group-hover:opacity-100 group-hover:translate-y-0",
+            ].join(" ")}
+          >
+            Tap to read the story
+          </span>
+        </div>
+
+        {/* Back: the story behind the song */}
+        <div
+          className={[
+            "absolute inset-0 overflow-y-auto rounded-lg [backface-visibility:hidden] [transform:rotateY(180deg)]",
+            "border border-white/25 bg-[linear-gradient(160deg,rgba(14,26,45,0.97),rgba(38,20,28,0.97))]",
+            "flex flex-col justify-center px-6 py-6 sm:px-8",
+          ].join(" ")}
+        >
+          <span className="font-gp-sans text-[0.62rem] font-semibold uppercase tracking-[0.24em] text-red-400">
+            The Story Behind the Song
+          </span>
+          <h3 className="mt-2 font-gp-display text-[1.35rem] font-bold leading-tight text-white">
+            Poets &amp; Writers
+          </h3>
+          <p className="mt-4 font-gp-sans text-[0.92rem] leading-relaxed text-white/85">
+            The author saw a young woman coming from the library and, in that simple
+            moment, imagined the beginning of a great love. That observation inspired
+            <span className="italic"> Poets &amp; Writers</span>, a song about two young
+            people meeting and slowly falling in love. It is a reflection on how one
+            fleeting moment can inspire an entire story.
+          </p>
+          <span className="mt-5 font-gp-sans text-[0.72rem] uppercase tracking-[0.18em] text-white/60">
+            — From the Author
+          </span>
+          <span className="mt-4 font-gp-sans text-[0.58rem] uppercase tracking-[0.16em] text-white/40">
+            Tap to flip back
+          </span>
         </div>
       </div>
     </div>

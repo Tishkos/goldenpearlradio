@@ -36,7 +36,7 @@ export default function Header() {
                 </span>
               </span>
               <span className="font-gp-display text-[1.05rem] sm:text-[1.15rem] font-semibold tracking-[0.02em] text-white">
-                Golden Pearl Radio Dubai
+                Golden Pearl Radio International
               </span>
             </Link>
 

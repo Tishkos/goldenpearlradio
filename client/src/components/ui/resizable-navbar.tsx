@@ -313,7 +313,7 @@ export const NavbarLogo = ({ className }: NavbarLogoProps) => {
     >
       <PillBarLogo />
       <span className="font-poppins text-xl text-white leading-tight">
-        Golden Pearl Radio Dubai
+        Golden Pearl Radio International
       </span>
     </Link>
   );
