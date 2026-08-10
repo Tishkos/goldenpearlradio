@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { api, getAuthToken } from "@/lib/api-client";
 import { subscribeToRadioTimelineSync } from "@/lib/radio-timeline-sync";
-import { useAudioPlayback, useListenerTracking, useBackgroundPlayback, useAutoPlayback } from "@/pages/home/hooks";
+import { useAudioPlayback, useListenerTracking } from "@/pages/home/hooks";
 import { API_ENDPOINTS, POLLING_INTERVALS, QUERY_KEYS } from "@/pages/home/constants";
 import type { Advertisement, HostCommentary, News, Product, ShowItem, Talk, Track } from "@/types/api-models";
 
@@ -567,9 +567,6 @@ export function PublicRadioProvider({ children }: { children: React.ReactNode })
 
   const currentSong = effectiveStreamData ?? null;
 
-  useBackgroundPlayback(isPlaying, currentSong?.playing ?? false);
-  useAutoPlayback(isPlaying, currentSong?.playing ?? false, queryClient);
-
   useEffect(() => {
     if (isPublicRoute) return;
     const audio = audioRef.current;
@@ -650,8 +647,12 @@ export function PublicRadioProvider({ children }: { children: React.ReactNode })
     };
   }, [isPublicRoute, connectLiveStream]);
 
-  // Live streams must always make progress. If playback stalls, or the stream
-  // ends/errors (e.g. backend restart), rejoin automatically.
+  // A live radio must always be AT the live edge. Two failure modes are
+  // handled here, both by rejoining the broadcast fresh:
+  //  - Stall: currentTime stops advancing (network drop, backend restart).
+  //  - Drift: playback falls behind the live edge (tab was throttled or the
+  //    OS paused audio while the connection kept buffering). Resuming that
+  //    stale buffer is what "replays previous songs/seconds" — never do it.
   useEffect(() => {
     if (!isPublicRoute) return;
 
@@ -661,11 +662,21 @@ export function PublicRadioProvider({ children }: { children: React.ReactNode })
 
       const now = Date.now();
       const time = audio.currentTime;
+
+      const buffered = audio.buffered;
+      const bufferedEnd = buffered.length > 0 ? buffered.end(buffered.length - 1) : 0;
+      const lagBehindLive = bufferedEnd - time;
+      if (!audio.paused && lagBehindLive > 12) {
+        lastProgressRef.current = { time, at: now };
+        void connectLiveStream();
+        return;
+      }
+
       if (time !== lastProgressRef.current.time) {
         lastProgressRef.current = { time, at: now };
         return;
       }
-      if (now - lastProgressRef.current.at > 8000) {
+      if (now - lastProgressRef.current.at > 10000) {
         lastProgressRef.current = { time, at: now };
         void connectLiveStream();
       }
@@ -673,6 +684,35 @@ export function PublicRadioProvider({ children }: { children: React.ReactNode })
 
     return () => window.clearInterval(interval);
   }, [isPublicRoute, isPlaying, connectLiveStream]);
+
+  // Coming back from a hidden tab / locked phone: if playback was interrupted
+  // or fell behind while we were away, rejoin live instead of resuming the
+  // stale buffer.
+  useEffect(() => {
+    if (!isPublicRoute) return;
+
+    const rejoinIfStale = () => {
+      if (document.hidden) return;
+      const audio = audioRef.current;
+      if (!audio || !userWantsPlaybackRef.current || !audio.currentSrc) return;
+
+      const buffered = audio.buffered;
+      const bufferedEnd = buffered.length > 0 ? buffered.end(buffered.length - 1) : 0;
+      const lagBehindLive = bufferedEnd - audio.currentTime;
+      if (audio.paused || audio.ended || lagBehindLive > 12) {
+        void connectLiveStream();
+      }
+    };
+
+    document.addEventListener("visibilitychange", rejoinIfStale);
+    window.addEventListener("focus", rejoinIfStale);
+    window.addEventListener("pageshow", rejoinIfStale);
+    return () => {
+      document.removeEventListener("visibilitychange", rejoinIfStale);
+      window.removeEventListener("focus", rejoinIfStale);
+      window.removeEventListener("pageshow", rejoinIfStale);
+    };
+  }, [isPublicRoute, connectLiveStream]);
 
   useEffect(() => {
     const audio = audioRef.current;

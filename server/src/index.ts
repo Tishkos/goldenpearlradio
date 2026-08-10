@@ -25,7 +25,7 @@ const AUDIO_FORMAT = {
 const TICK_INTERVAL_MS = 100; // The "frame rate" of the audio engine
 const SAMPLES_PER_TICK = Math.floor(AUDIO_FORMAT.sampleRate * (TICK_INTERVAL_MS / 1000));
 const BYTES_PER_TICK = SAMPLES_PER_TICK * AUDIO_FORMAT.channels * AUDIO_FORMAT.byteDepth;
-const BUFFER_AHEAD_SECONDS = 15; // Pre-fetch and decode audio 15 seconds before it's needed
+const BUFFER_AHEAD_SECONDS = 60; // Pre-fetch and decode audio well before it's needed so track changes are seamless
 const STREAM_TIMEZONE = process.env.STREAM_TIMEZONE || 'Europe/Budapest';
 
 function getStationParts(date: Date, timeZone = STREAM_TIMEZONE) {
@@ -576,10 +576,16 @@ class RadioStreamer {
   public removeHttpClient(clientId: string) {
     this.httpClients.delete(clientId);
     console.log(`[Station ${this.stationId}] Listener disconnected. Total: ${this.httpClients.size}`);
-    
-    // If this was the last listener, shut down the engine to save resources
-    if (this.isPlaying && this.httpClients.size === 0) {
-      this.stop();
+    // The engine keeps running with zero listeners. Stopping and cold-starting
+    // per listener caused seconds of silence on every (re)connect: schedule
+    // queries plus decoding the current track had to finish before any audio.
+    // An always-on engine means every listener joins the broadcast instantly.
+  }
+
+  // Start the broadcast engine independently of listeners (called at boot).
+  public ensureStarted() {
+    if (!this.isPlaying) {
+      void this.start();
     }
   }
 
@@ -2018,4 +2024,11 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`Stream endpoint: http://localhost:${PORT}/stream`);
   console.log(`API endpoint: http://localhost:${PORT}/api`);
   console.log(`From emulator/other device: use this machine's IP (e.g. http://192.168.x.x:${PORT})`);
+
+  // Boot the broadcast engine immediately: the station is always on air, so
+  // listeners join the running stream instantly instead of triggering a cold
+  // start (schedule load + decode) on first connect.
+  const bootStreamer = new RadioStreamer('1');
+  streamers.set('1', bootStreamer);
+  bootStreamer.ensureStarted();
 });

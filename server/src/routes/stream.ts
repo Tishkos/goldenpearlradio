@@ -10,6 +10,8 @@ let lastLoggedShowItemId: number | null = null;
 
 // Simple stream endpoint - returns current song based on timeline schedule
 router.get('/current', async (req: Request, res: Response) => {
+  // Live metadata must never be cached by browsers or proxies
+  res.setHeader('Cache-Control', 'no-store');
   try {
     const now = new Date();
     // The radio schedule is tied to a station timezone. If the server runs in UTC (or any other TZ),
