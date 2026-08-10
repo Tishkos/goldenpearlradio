@@ -605,10 +605,10 @@ class RadioStreamer {
     // Start the audio engine - it will handle silence if no show is scheduled
     this.audioEngineInterval = setInterval(() => this.audioEngineTick(), TICK_INTERVAL_MS);
     
-    // Periodically check for new shows (every 30 seconds)
+    // Periodically reload the editor timeline so changes go live quickly
     this.showCheckInterval = setInterval(async () => {
       await this.checkForNewShow();
-    }, 30000);
+    }, 10000);
     
     // Set show start time for synchronization
     this.showStartTime = new Date();
@@ -1300,9 +1300,64 @@ class RadioStreamer {
     this.audioLoadPromises.set(audioUrl, loadPromise);
   }
 
+  // Maps an /api/uploads/... URL (any host) to the local file on disk, if it exists.
+  // Decoding from disk avoids a fragile HTTP round-trip through the public domain/nginx
+  // when the stream server fetches its own uploads.
+  private resolveLocalUploadPath(audioUrl: string): string | null {
+    try {
+      const parsed = new URL(audioUrl, 'http://localhost');
+      const match = parsed.pathname.match(/^\/api\/uploads\/(.+)$/);
+      if (!match) return null;
+      const uploadsRoot = path.resolve(process.cwd(), 'uploads');
+      const candidate = path.resolve(uploadsRoot, decodeURIComponent(match[1]));
+      if (!candidate.startsWith(uploadsRoot)) return null;
+      return fs.existsSync(candidate) ? candidate : null;
+    } catch {
+      return null;
+    }
+  }
+
+  // Decodes a local audio file to raw PCM via FFmpeg
+  private decodeLocalAudioFile(filePath: string): Promise<Int16Array | null> {
+    return new Promise((resolve, reject) => {
+      const ffmpegPath = resolveFfmpegPath();
+      if (!ffmpegPath) {
+        reject(new Error('FFmpeg not found. Cannot decode audio.'));
+        return;
+      }
+      const decoder = spawn(ffmpegPath, [
+        '-i', filePath,
+        '-f', `s${AUDIO_FORMAT.bitDepth}le`,
+        '-ar', `${AUDIO_FORMAT.sampleRate}`,
+        '-ac', `${AUDIO_FORMAT.channels}`,
+        '-'
+      ], { stdio: ['ignore', 'pipe', 'pipe'] });
+
+      const rawAudioChunks: Buffer[] = [];
+      const errorChunks: Buffer[] = [];
+      decoder.stdout?.on('data', (chunk: Buffer) => rawAudioChunks.push(chunk));
+      decoder.stderr?.on('data', (chunk: Buffer) => errorChunks.push(chunk));
+      decoder.on('close', (code) => {
+        if (code !== 0) {
+          reject(new Error(`FFmpeg decoder failed with code ${code}: ${Buffer.concat(errorChunks).toString().slice(-500)}`));
+          return;
+        }
+        const combined = Buffer.concat(rawAudioChunks);
+        resolve(new Int16Array(combined.buffer, combined.byteOffset, combined.byteLength / 2));
+      });
+      decoder.on('error', (error) => reject(new Error(`FFmpeg decoder error: ${error.message}`)));
+    });
+  }
+
   // Fetches an audio file and uses a temporary FFmpeg process to decode it to raw PCM data
   private async fetchAndDecodeAudio(audioUrl: string): Promise<Int16Array | null> {
     try {
+        // Prefer decoding our own uploads straight from disk
+        const localPath = this.resolveLocalUploadPath(audioUrl);
+        if (localPath) {
+          return await this.decodeLocalAudioFile(localPath);
+        }
+
         const response = await fetch(audioUrl);
         if (!response.ok || !response.body) {
             throw new Error(`Failed to fetch audio file: ${response.statusText}`);
@@ -1461,7 +1516,9 @@ class RadioStreamer {
     
     // Calculate the final timeline layout
     this.timelineItems = this.calculateTimelineLayout(enrichedItems);
-    
+
+    this.evictFinishedAudioFromCache();
+
     console.log(`[Station ${this.stationId}] Loaded ${this.timelineItems.length} valid items for today. Stream synchronized to start of day.`);
     
     // Debug: Log timeline items with their calculated times
@@ -1476,6 +1533,24 @@ class RadioStreamer {
         const endSecs = Math.floor(item.calculatedEndTime % 60);
         console.log(`  [${idx}] ${item.contentTitle || 'Untitled'}: ${startHours}:${startMins.toString().padStart(2, '0')}:${startSecs.toString().padStart(2, '0')} → ${endHours}:${endMins.toString().padStart(2, '0')}:${endSecs.toString().padStart(2, '0')} (startTimeOffset: ${item.startTimeOffset}s)`);
       });
+    }
+  }
+
+  // Decoded PCM is ~10MB per minute of audio; drop tracks that already finished
+  // so a full broadcast day cannot exhaust server memory.
+  private evictFinishedAudioFromCache() {
+    if (this.audioCache.size === 0) return;
+    const graceSeconds = 60;
+    const stillNeeded = new Set<string>();
+    for (const item of this.timelineItems) {
+      if (item.audioUrl && item.calculatedEndTime >= this.showTime - graceSeconds) {
+        stillNeeded.add(item.audioUrl);
+      }
+    }
+    for (const url of this.audioCache.keys()) {
+      if (!stillNeeded.has(url) && !this.audioLoadPromises.has(url)) {
+        this.audioCache.delete(url);
+      }
     }
   }
 

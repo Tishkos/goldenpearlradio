@@ -64,10 +64,6 @@ interface StreamCurrentResponse {
   };
 }
 
-interface SyncMarkers {
-  [url: string]: boolean;
-}
-
 type ResolvedTimelineItem = {
   id: number;
   title: string | null;
@@ -188,46 +184,19 @@ export function PublicRadioProvider({ children }: { children: React.ReactNode })
     return `${streamServerUrl}${rawUrl.startsWith("/") ? "" : "/"}${rawUrl}`;
   }, []);
 
-  const normalizeResolvedUrl = useCallback((rawUrl?: string | null) => {
-    if (!rawUrl) return "";
-    try {
-      const parsed = new URL(rawUrl, window.location.origin);
-      // Stream URLs can include volatile query params (signed/cache-busting tokens).
-      // Strip them for comparison so we do not restart playback unnecessarily.
-      parsed.search = "";
-      parsed.hash = "";
-      return `${parsed.origin}${parsed.pathname}`;
-    } catch {
-      const trimmed = rawUrl.trim();
-      return trimmed.split("#")[0].split("?")[0];
-    }
+  // The website plays the server's continuous live broadcast (/stream): one
+  // ffmpeg-mixed MP3 stream, identical and synchronized for every listener,
+  // driven by the radio editor timeline. The metadata endpoints below are only
+  // used to display what is on air — never to drive playback position.
+  const liveStreamUrl = useMemo(() => {
+    const base = import.meta.env.VITE_STREAM_SERVER_URL || "http://127.0.0.1:3001";
+    return `${base.replace(/\/+$/, "")}/stream`;
   }, []);
 
-  const waitForSeeked = useCallback((audio: HTMLAudioElement, timeoutMs: number) => {
-    return new Promise<void>((resolve) => {
-      let settled = false;
-      const finish = () => {
-        if (settled) return;
-        settled = true;
-        audio.removeEventListener("seeked", onSeeked);
-        window.clearTimeout(timerId);
-        resolve();
-      };
-      const onSeeked = () => finish();
-      const timerId = window.setTimeout(finish, timeoutMs);
-      audio.addEventListener("seeked", onSeeked, { once: true });
-    });
-  }, []);
-
-  // IMPORTANT: URL can repeat across adjacent schedule items; key off item id + url.
-  const lastStreamKeyRef = useRef<string | null>(null);
-  const hasSyncedRef = useRef<SyncMarkers>({});
-  const pendingStreamSwitchRef = useRef<{ key: string; seenAt: number; confirmations: number } | null>(null);
-  const lastPositionSampleRef = useRef<{
-    position: number;
-    receivedAt: number;
-    streamKey: string;
-  } | null>(null);
+  const userWantsPlaybackRef = useRef(true);
+  const nextAutoConnectAttemptRef = useRef(0);
+  const lastProgressRef = useRef<{ time: number; at: number }>({ time: 0, at: 0 });
+  const reconnectTimerRef = useRef<number | null>(null);
   const missingLiveSinceRef = useRef<number | null>(null);
 
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -237,7 +206,6 @@ export function PublicRadioProvider({ children }: { children: React.ReactNode })
   const pauseAudio = playback.pause;
   const setAudioVolume = playback.setVolume;
   const setAudioMuted = playback.setMuted;
-  const pendingPlayRef = playback.pendingPlayRef;
   useListenerTracking(isPlaying, api);
 
   useEffect(() => setupUserInteractionListener(), [setupUserInteractionListener]);
@@ -565,25 +533,35 @@ export function PublicRadioProvider({ children }: { children: React.ReactNode })
 
     const scheduledCurrentId = fallbackStreamData?.debug?.scheduledCurrentId ?? null;
     const hasScheduledCurrentWindow = Boolean(scheduledCurrentId);
-    const serverMatchesScheduledWindow =
-      scheduledCurrentId != null &&
-      normalizedServerData?.current?.id != null &&
-      Number(normalizedServerData.current.id) === Number(scheduledCurrentId);
 
-    const shouldPreferFallback =
-      Boolean(fallbackStreamData?.current) &&
-      (
-        !normalizedServerData?.current ||
-        normalizedServerData.playing !== true ||
-        !normalizedServerData.debug?.stationTimeZone ||
-        serverClockSkew > 90 ||
-        !serverMatchesScheduledWindow
-      );
+    // The stream server is the authority on what is *actually* playing — it is
+    // the thing emitting the audio. The timeline fallback exists to cover the
+    // server being unavailable or clearly wrong, not to overrule it.
+    //
+    // This distinction is what caused the label to stall at a track change. The
+    // server advances the moment the next track starts, but the client's
+    // scheduled window is computed from its own clock and the published
+    // timeline, so for a few seconds either side of a boundary the two disagree
+    // about which item is current. The previous logic treated any such
+    // disagreement as "the server is wrong" and displayed the *scheduled* item —
+    // which, at a boundary, is the track that has just finished. It corrected
+    // itself once the window advanced, which is exactly why it looked
+    // intermittent and why it always resolved on its own.
+    //
+    // A window mismatch is now no longer grounds on its own to override the
+    // server. The genuine failure signals are kept: no current track, not
+    // playing, no station timezone, or a clock more than 90s out.
+    const serverIsTrustworthy =
+      Boolean(normalizedServerData?.current) &&
+      normalizedServerData?.playing === true &&
+      Boolean(normalizedServerData?.debug?.stationTimeZone) &&
+      serverClockSkew <= 90;
+
+    const shouldPreferFallback = Boolean(fallbackStreamData?.current) && !serverIsTrustworthy;
 
     if (!enableProtectedPublicFallback) return normalizedServerData || null;
     if (!hasScheduledCurrentWindow) return fallbackStreamData;
     if (shouldPreferFallback) return fallbackStreamData;
-    if (normalizedServerData?.current && !serverMatchesScheduledWindow) return fallbackStreamData;
     return normalizedServerData || fallbackStreamData || null;
   }, [enableProtectedPublicFallback, fallbackStreamData, stationCurrentSeconds, streamData]);
 
@@ -594,240 +572,133 @@ export function PublicRadioProvider({ children }: { children: React.ReactNode })
 
   useEffect(() => {
     if (isPublicRoute) return;
-    if (audioRef.current) {
-      audioRef.current.pause();
+    const audio = audioRef.current;
+    if (audio) {
+      audio.pause();
+      audio.removeAttribute("src");
+      audio.load();
     }
     setIsPlaying(false);
   }, [isPublicRoute]);
 
-  useEffect(() => {
-    if (!effectiveStreamData) {
-      return;
-    }
-
-    let timeoutId: number | null = null;
-    let handleCanPlay: (() => Promise<void>) | null = null;
-    let cancelled = false;
-
-    const resolvedCurrentUrl = resolveStreamUrl(effectiveStreamData.current?.url);
-    const normalizedCurrentUrl = normalizeResolvedUrl(resolvedCurrentUrl);
-    const streamKey = effectiveStreamData.current && normalizedCurrentUrl ? `${effectiveStreamData.current.id}:${normalizedCurrentUrl}` : null;
-
-    if (effectiveStreamData.playing && effectiveStreamData.current && !lastStreamKeyRef.current && streamKey) {
-      const currentSongData = effectiveStreamData.current;
-      const resolvedUrl = resolveStreamUrl(currentSongData.url);
-      const stableUrl = normalizeResolvedUrl(resolvedUrl);
-
-      timeoutId = window.setTimeout(() => {
-        const audio = audioRef.current;
-        if (cancelled || !audio || isPlaying || !currentSongData || !resolvedUrl || !stableUrl) return;
-
-        audio.src = resolvedUrl;
-        audio.playbackRate = 1.0;
-        audio.defaultPlaybackRate = 1.0;
-        audio.load();
-
-        handleCanPlay = async () => {
-          if (cancelled) return;
-          try {
-            audio.playbackRate = 1.0;
-            audio.defaultPlaybackRate = 1.0;
-            if (currentSongData.audioFilePosition > 0) {
-              audio.currentTime = currentSongData.audioFilePosition;
-            }
-            await playAudio();
-            setIsPlaying(true);
-            lastStreamKeyRef.current = `${currentSongData.id}:${stableUrl}`;
-            hasSyncedRef.current[lastStreamKeyRef.current] = true;
-          } catch {
-            pendingPlayRef.current = true;
-          }
-        };
-
-        audio.addEventListener("canplay", handleCanPlay, { once: true });
-      }, POLLING_INTERVALS.METADATA_LOAD_DELAY);
-    }
-
-    return () => {
-      cancelled = true;
-      if (timeoutId != null) {
-        window.clearTimeout(timeoutId);
-      }
-      if (handleCanPlay && audioRef.current) {
-        audioRef.current.removeEventListener("canplay", handleCanPlay as EventListener);
-      }
-    };
-  }, [effectiveStreamData, isPlaying, normalizeResolvedUrl, playAudio, pendingPlayRef, resolveStreamUrl]);
-
-  useEffect(() => {
+  // Join the live broadcast at "now". The cache-buster guarantees the browser
+  // opens a fresh connection instead of resuming a stale buffered position.
+  const connectLiveStream = useCallback(async () => {
     const audio = audioRef.current;
-    if (!audio || !currentSong?.playing || !currentSong.current) return;
+    if (!audio) return false;
 
-    const resolvedCurrentUrl = resolveStreamUrl(currentSong.current.url);
-    if (!resolvedCurrentUrl) return;
-    const stableCurrentUrl = normalizeResolvedUrl(resolvedCurrentUrl);
-    if (!stableCurrentUrl) return;
-    const currentId = currentSong.current.id;
-    const audioFilePosition = currentSong.current.audioFilePosition || 0;
-    const currentStreamKey = `${currentId}:${stableCurrentUrl}`;
-    const currentLoadedUrl = normalizeResolvedUrl(audio.currentSrc || audio.src || "");
-    const urlChanged = currentLoadedUrl !== stableCurrentUrl;
+    audio.src = `${liveStreamUrl}?t=${Date.now()}`;
+    audio.playbackRate = 1.0;
+    audio.defaultPlaybackRate = 1.0;
+    audio.load();
 
-    // If item changes (even with same URL), reload + hard sync once.
-    if (currentStreamKey !== lastStreamKeyRef.current) {
-      // If only the item id changed but URL stayed the same, do not restart audio.
-      if (!urlChanged) {
-        pendingStreamSwitchRef.current = null;
-        lastStreamKeyRef.current = currentStreamKey;
-        hasSyncedRef.current[currentStreamKey] = true;
+    const didPlay = await playAudio();
+    if (didPlay) {
+      setIsPlaying(true);
+      lastProgressRef.current = { time: -1, at: Date.now() };
+    } else {
+      // Autoplay blocked or stream unavailable: drop the connection so we do
+      // not keep buffering; a user gesture or the auto-connect retry rejoins.
+      audio.removeAttribute("src");
+      audio.load();
+      setIsPlaying(false);
+    }
+    return didPlay;
+  }, [liveStreamUrl, playAudio]);
+
+  const disconnectLiveStream = useCallback(() => {
+    const audio = audioRef.current;
+    pauseAudio();
+    if (audio) {
+      audio.removeAttribute("src");
+      audio.load();
+    }
+    setIsPlaying(false);
+  }, [pauseAudio]);
+
+  const isLiveNow = Boolean(effectiveStreamData?.playing && effectiveStreamData?.current);
+
+  // Auto-connect while the station is on air (retries cover blocked autoplay
+  // and temporary backend outages without hammering the server).
+  useEffect(() => {
+    if (!isPublicRoute || !isLiveNow || isPlaying || !userWantsPlaybackRef.current) return;
+    if (Date.now() < nextAutoConnectAttemptRef.current) return;
+
+    nextAutoConnectAttemptRef.current = Date.now() + 15000;
+    const timer = window.setTimeout(() => {
+      if (!userWantsPlaybackRef.current) return;
+      void connectLiveStream();
+    }, POLLING_INTERVALS.METADATA_LOAD_DELAY);
+    return () => window.clearTimeout(timer);
+  }, [isPublicRoute, isLiveNow, isPlaying, connectLiveStream, effectiveStreamData]);
+
+  // First user gesture starts the stream when autoplay was blocked.
+  useEffect(() => {
+    if (!isPublicRoute) return;
+
+    const resumeOnGesture = () => {
+      if (!userWantsPlaybackRef.current) return;
+      const audio = audioRef.current;
+      if (!audio || !audio.paused) return;
+      void connectLiveStream();
+    };
+
+    const events = ["pointerdown", "touchstart", "keydown"] as const;
+    events.forEach((event) => document.addEventListener(event, resumeOnGesture));
+    return () => {
+      events.forEach((event) => document.removeEventListener(event, resumeOnGesture));
+    };
+  }, [isPublicRoute, connectLiveStream]);
+
+  // Live streams must always make progress. If playback stalls, or the stream
+  // ends/errors (e.g. backend restart), rejoin automatically.
+  useEffect(() => {
+    if (!isPublicRoute) return;
+
+    const interval = window.setInterval(() => {
+      const audio = audioRef.current;
+      if (!audio || !userWantsPlaybackRef.current || !isPlaying || !audio.currentSrc) return;
+
+      const now = Date.now();
+      const time = audio.currentTime;
+      if (time !== lastProgressRef.current.time) {
+        lastProgressRef.current = { time, at: now };
         return;
       }
-
-      const isLiveStream = !Number.isFinite(audio.duration) || audio.duration === 0;
-      if (isLiveStream && !audio.paused && !audio.ended) {
-        const now = Date.now();
-        const pendingSwitch = pendingStreamSwitchRef.current;
-        if (!pendingSwitch || pendingSwitch.key !== currentStreamKey || now - pendingSwitch.seenAt > 10_000) {
-          pendingStreamSwitchRef.current = { key: currentStreamKey, seenAt: now, confirmations: 0 };
-          return;
-        }
-        if (pendingSwitch.confirmations < 2) {
-          pendingStreamSwitchRef.current = {
-            ...pendingSwitch,
-            confirmations: pendingSwitch.confirmations + 1,
-            seenAt: now,
-          };
-          return;
-        }
+      if (now - lastProgressRef.current.at > 8000) {
+        lastProgressRef.current = { time, at: now };
+        void connectLiveStream();
       }
+    }, 2000);
 
-      // Confirm URL/key changes across more than one poll to avoid flapping/reload loops.
-      const canSwitchImmediately = audio.paused || audio.ended || !audio.currentSrc;
-      if (!canSwitchImmediately) {
-        const now = Date.now();
-        const pendingSwitch = pendingStreamSwitchRef.current;
-        if (!pendingSwitch || pendingSwitch.key !== currentStreamKey || now - pendingSwitch.seenAt > 10_000) {
-          pendingStreamSwitchRef.current = { key: currentStreamKey, seenAt: now, confirmations: 0 };
-          return;
-        }
-        if (pendingSwitch.confirmations < 2) {
-          pendingStreamSwitchRef.current = {
-            ...pendingSwitch,
-            seenAt: now,
-            confirmations: pendingSwitch.confirmations + 1,
-          };
-          return;
-        }
-      }
-      pendingStreamSwitchRef.current = null;
-
-      // If next URL arrived before current track naturally finishes, avoid mid-song cut.
-      // We'll switch when current playback reaches the end.
-      if (!audio.paused && !audio.ended && Number.isFinite(audio.duration) && audio.duration > 0) {
-        const remaining = Math.max(0, audio.duration - (audio.currentTime || 0));
-        if (remaining > 1.25) {
-          return;
-        }
-      }
-
-      lastStreamKeyRef.current = currentStreamKey;
-      hasSyncedRef.current[currentStreamKey] = false;
-      lastPositionSampleRef.current = null;
-      audio.src = resolvedCurrentUrl;
-      audio.playbackRate = 1.0;
-      audio.defaultPlaybackRate = 1.0;
-
-      const handleLoadedMetadata = async () => {
-        if (!hasSyncedRef.current[currentStreamKey] && audioFilePosition > 0) {
-          hasSyncedRef.current[currentStreamKey] = true;
-          audio.currentTime = Math.min(audioFilePosition, Math.max(0, audio.duration - 0.1));
-          await waitForSeeked(audio, 800);
-          lastPositionSampleRef.current = {
-            position: audioFilePosition,
-            receivedAt: Date.now(),
-            streamKey: currentStreamKey,
-          };
-        }
-
-        audio.playbackRate = 1.0;
-        audio.defaultPlaybackRate = 1.0;
-        const didPlay = await playAudio();
-        if (didPlay && !isPlaying) {
-          setIsPlaying(true);
-        }
-      };
-
-      audio.addEventListener("loadedmetadata", handleLoadedMetadata, { once: true });
-      audio.load();
-      return;
-    }
-    pendingStreamSwitchRef.current = null;
-
-    const sample = lastPositionSampleRef.current;
-    if (sample && sample.streamKey === currentStreamKey) {
-      const now = Date.now();
-      const elapsedSeconds = (now - sample.receivedAt) / 1000;
-      const expectedPosition = sample.position + elapsedSeconds;
-      const positionIsStale = Math.abs(audioFilePosition - expectedPosition) > 4;
-      if (positionIsStale) return;
-      lastPositionSampleRef.current = {
-        position: audioFilePosition,
-        receivedAt: now,
-        streamKey: currentStreamKey,
-      };
-      return;
-    }
-    lastPositionSampleRef.current = {
-      position: audioFilePosition,
-      receivedAt: Date.now(),
-      streamKey: currentStreamKey,
-    };
-  }, [
-    currentSong,
-    isPlaying,
-    normalizeResolvedUrl,
-    playAudio,
-    resolveStreamUrl,
-  ]);
+    return () => window.clearInterval(interval);
+  }, [isPublicRoute, isPlaying, connectLiveStream]);
 
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
 
-    const handleEnded = async () => {
-      if (!currentSong?.playing) {
-        return;
-      }
-
-      // Start the next scheduled item immediately to avoid dead air between tracks.
-      const immediateNextUrl = resolveStreamUrl(currentSong.next?.url ?? null);
-      const stableNextUrl = normalizeResolvedUrl(immediateNextUrl);
-      if (immediateNextUrl && stableNextUrl && currentSong.next) {
-        const nextStreamKey = `${currentSong.next.id}:${stableNextUrl}`;
-        lastStreamKeyRef.current = nextStreamKey;
-        hasSyncedRef.current[nextStreamKey] = true;
-        lastPositionSampleRef.current = null;
-
-        audio.src = immediateNextUrl;
-        audio.playbackRate = 1.0;
-        audio.defaultPlaybackRate = 1.0;
-        audio.load();
-
-        const didPlay = await playAudio();
-        if (didPlay) {
-          setIsPlaying(true);
-        } else {
-          pendingPlayRef.current = true;
-        }
-      }
-
-      // Keep state aligned with backend timeline after the immediate handoff.
-      queryClient.invalidateQueries({ queryKey: QUERY_KEYS.STREAM_CURRENT });
+    const scheduleReconnect = () => {
+      // Only reconnect for genuine mid-stream failures, not our own disconnects.
+      if (!userWantsPlaybackRef.current || !audio.currentSrc) return;
+      if (reconnectTimerRef.current != null) return;
+      reconnectTimerRef.current = window.setTimeout(() => {
+        reconnectTimerRef.current = null;
+        if (userWantsPlaybackRef.current) void connectLiveStream();
+      }, 2000);
     };
 
-    audio.addEventListener("ended", handleEnded);
-    return () => audio.removeEventListener("ended", handleEnded);
-  }, [currentSong, normalizeResolvedUrl, pendingPlayRef, playAudio, queryClient, resolveStreamUrl]);
+    audio.addEventListener("ended", scheduleReconnect);
+    audio.addEventListener("error", scheduleReconnect);
+    return () => {
+      audio.removeEventListener("ended", scheduleReconnect);
+      audio.removeEventListener("error", scheduleReconnect);
+      if (reconnectTimerRef.current != null) {
+        window.clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
+    };
+  }, [connectLiveStream]);
 
   useEffect(() => {
     setAudioVolume(volume);
@@ -841,87 +712,18 @@ export function PublicRadioProvider({ children }: { children: React.ReactNode })
     if (!isPublicRoute) return;
     void (async () => {
       if (isPlaying) {
-        pauseAudio();
-        setIsPlaying(false);
+        userWantsPlaybackRef.current = false;
+        disconnectLiveStream();
         return;
       }
 
-      const candidate = effectiveStreamData;
-      const latestCurrent = candidate?.current;
-      const isLiveNow = Boolean(candidate?.playing && latestCurrent?.url && isPublicRoute);
-      const urlToPlay = resolveStreamUrl(isLiveNow ? latestCurrent?.url : null);
-      const stableUrlToPlay = normalizeResolvedUrl(urlToPlay);
-      if (!urlToPlay || !stableUrlToPlay) {
-        setIsPlaying(false);
+      userWantsPlaybackRef.current = true;
+      const didPlay = await connectLiveStream();
+      if (!didPlay) {
         void queryClient.invalidateQueries({ queryKey: QUERY_KEYS.STREAM_CURRENT });
-        return;
       }
-      const audio = audioRef.current;
-      if (urlToPlay && audio) {
-        const targetAudioPosition = isLiveNow
-          ? Math.max(0, Number(latestCurrent?.audioFilePosition || 0))
-          : 0;
-        const currentLoadedUrl = normalizeResolvedUrl(audio.currentSrc || audio.src || "");
-
-        if (!currentLoadedUrl || currentLoadedUrl !== stableUrlToPlay) {
-          // When manually starting playback, treat it as a new stream key so it will sync on next poll.
-          const latestStableUrl = normalizeResolvedUrl(resolveStreamUrl(latestCurrent?.url));
-          lastStreamKeyRef.current = isLiveNow && latestCurrent
-            ? `${latestCurrent.id}:${latestStableUrl}`
-            : null;
-          audio.src = urlToPlay;
-          audio.playbackRate = 1.0;
-          audio.defaultPlaybackRate = 1.0;
-
-          const onLoadedMetadata = () => {
-            if (targetAudioPosition > 0) {
-              try {
-                const cap = Number.isFinite(audio.duration) && audio.duration > 0
-                  ? Math.max(0, audio.duration - 0.1)
-                  : targetAudioPosition;
-                audio.currentTime = Math.min(targetAudioPosition, cap);
-              } catch {
-                // no-op
-              }
-            }
-          };
-          audio.addEventListener("loadedmetadata", onLoadedMetadata, { once: true });
-
-          audio.load();
-          const didPlay = await playAudio();
-          if (didPlay) setIsPlaying(true);
-          return;
-        }
-
-        // Same URL paused -> sync live position first, then resume.
-        if (targetAudioPosition > 0) {
-          try {
-            const cap = Number.isFinite(audio.duration) && audio.duration > 0
-              ? Math.max(0, audio.duration - 0.1)
-              : targetAudioPosition;
-            audio.currentTime = Math.min(targetAudioPosition, cap);
-          } catch {
-            // no-op
-          }
-        }
-        audio.playbackRate = 1.0;
-        audio.defaultPlaybackRate = 1.0;
-        const didPlay = await playAudio();
-        if (didPlay) setIsPlaying(true);
-      }
-
-      // No current item -> do nothing.
     })();
-  }, [
-    isPublicRoute,
-    isPlaying,
-    normalizeResolvedUrl,
-    pauseAudio,
-    playAudio,
-    resolveStreamUrl,
-    effectiveStreamData,
-    queryClient,
-  ]);
+  }, [isPublicRoute, isPlaying, connectLiveStream, disconnectLiveStream, queryClient]);
 
   // Strict schedule behavior: if backend says there's no current live item, stop local playback.
   useEffect(() => {
@@ -948,10 +750,11 @@ export function PublicRadioProvider({ children }: { children: React.ReactNode })
     }
 
     if (missingFor < 120000) return;
-    pauseAudio();
-    setIsPlaying(false);
+    // Off air for 2 minutes: stop consuming the stream. userWantsPlaybackRef
+    // stays true, so the auto-connect effect rejoins when the broadcast returns.
+    disconnectLiveStream();
     missingLiveSinceRef.current = null;
-  }, [effectiveStreamData?.playing, effectiveStreamData?.current, isPlaying, pauseAudio, queryClient]);
+  }, [effectiveStreamData?.playing, effectiveStreamData?.current, isPlaying, disconnectLiveStream, queryClient]);
 
   const isStreaming = effectiveStreamData?.playing ?? false;
   const hasCurrentTrack = Boolean(effectiveStreamData?.current);
