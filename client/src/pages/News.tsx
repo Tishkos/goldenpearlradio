@@ -71,7 +71,7 @@ export default function NewsPage() {
               Latest <span className="text-white italic">News</span>
             </h1>
             <p className="mt-4 mx-auto max-w-xl font-gp-serif text-[1.1rem] italic tracking-[0.04em] text-white/85">
-              Breaking news and updates from Golden Pearl Radio Dubai.
+              Breaking news and updates from Golden Pearl Radio International.
             </p>
           </header>
 

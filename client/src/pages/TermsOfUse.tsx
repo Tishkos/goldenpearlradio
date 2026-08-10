@@ -27,14 +27,14 @@ const TermsOfUse: React.FC = () => {
               <section>
                 <h2 className="text-2xl font-semibold mb-4">1. Acceptance of Terms</h2>
                 <p className="text-gray-700 leading-relaxed">
-                  By accessing and using Golden Pearl Radio Dubai ("the Service"), you accept and agree to be bound by the terms and provision of this agreement.
+                  By accessing and using Golden Pearl Radio International ("the Service"), you accept and agree to be bound by the terms and provision of this agreement.
                 </p>
               </section>
 
               <section>
                 <h2 className="text-2xl font-semibold mb-4">2. Use License</h2>
                 <p className="text-gray-700 leading-relaxed">
-                  Permission is granted to temporarily access the materials (information or software) on Golden Pearl Radio Dubai's website for personal, non-commercial transitory viewing only.
+                  Permission is granted to temporarily access the materials (information or software) on Golden Pearl Radio International's website for personal, non-commercial transitory viewing only.
                 </p>
                 <p className="text-gray-700 leading-relaxed mt-2">
                   This is the grant of a license, not a transfer of title, and under this license you may not:
@@ -85,7 +85,7 @@ const TermsOfUse: React.FC = () => {
               <section>
                 <h2 className="text-2xl font-semibold mb-4">7. Limitation of Liability</h2>
                 <p className="text-gray-700 leading-relaxed">
-                  In no event shall Golden Pearl Radio Dubai, nor its directors, employees, partners, agents, suppliers, or affiliates, be liable for any indirect, incidental, special, consequential, or punitive damages, including without limitation, loss of profits, data, use, goodwill, or other intangible losses.
+                  In no event shall Golden Pearl Radio International, nor its directors, employees, partners, agents, suppliers, or affiliates, be liable for any indirect, incidental, special, consequential, or punitive damages, including without limitation, loss of profits, data, use, goodwill, or other intangible losses.
                 </p>
               </section>
 

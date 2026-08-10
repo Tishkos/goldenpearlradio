@@ -183,7 +183,7 @@ export default function PitchUs() {
               </h1>
             </div>
             <p className="text-lg font-poppins font-light text-gray-700 dark:text-neutral-300 max-w-4xl mx-auto leading-relaxed mb-6">
-              Partner with Golden Pearl Radio Dubai to amplify your brand, promote your events, 
+              Partner with Golden Pearl Radio International to amplify your brand, promote your events, 
               and connect with our engaged community across the Emirates. Let's create something extraordinary together.
             </p>
             <div className="flex flex-wrap justify-center gap-4">
