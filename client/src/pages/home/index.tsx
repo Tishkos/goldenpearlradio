@@ -20,12 +20,6 @@ import {
   ListenerCount,
   WhatsappContactButton,
 } from "./components";
-import {
-  LiveRadioArt,
-  MusicShowsArt,
-  NewsArt,
-  ShopArt,
-} from "@/components/illustrations/PartnershipArt";
 
 export default function Home() {
   const {
@@ -107,42 +101,8 @@ export default function Home() {
           </a>
         </section>
 
-        {/* What we do — told in pictures, not paragraphs */}
-        <section
-          aria-label="What Golden Pearl Radio offers"
-          className="max-w-[1280px] mx-auto pt-12 grid grid-cols-2 lg:grid-cols-4 gap-4"
-        >
-          {[
-            { art: <LiveRadioArt />, caption: "24/7 Live Radio", href: "/" },
-            { art: <MusicShowsArt />, caption: "Music & Shows", href: "/programme" },
-            { art: <NewsArt />, caption: "News & Stories", href: "/news" },
-            { art: <ShopArt />, caption: "Shop & Partners", href: "/store" },
-          ].map((item) => (
-            <Link
-              key={item.caption}
-              href={item.href}
-              className="group block overflow-hidden rounded-xl border border-white/20 bg-[#F6EFE0] shadow-[0_10px_30px_rgba(0,0,0,0.25)] transition-transform duration-300 hover:scale-[1.03] focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
-            >
-              <div className="transition-transform duration-500 group-hover:scale-[1.05]">
-                {item.art}
-              </div>
-              <div className="border-t border-[#3E5F80]/15 px-3 py-2.5 text-center font-gp-sans text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-[#3E5F80]">
-                {item.caption}
-              </div>
-            </Link>
-          ))}
-        </section>
-
         <div className="max-w-[1280px] mx-auto pt-12 pb-16 grid grid-cols-1 lg:grid-cols-12 gap-6 items-start lg:items-stretch">
           <section className="relative z-20 lg:col-span-4 order-2 lg:order-1">
-            <div className="mb-4">
-              <img
-                src="/board.jpeg"
-                alt="Golden Pearl Radio artwork"
-                className="w-full h-auto rounded-lg"
-                draggable={false}
-              />
-            </div>
             <div className="font-gp-sans text-[0.65rem] font-medium tracking-[0.2em] uppercase text-white/90 mb-4 flex items-center gap-2">
               <ShoppingBag className="h-4 w-4" />
               Promotion
@@ -290,48 +250,33 @@ function NewsStoryFlipCard({ onImageError }: { onImageError: () => void }) {
           </span>
         </div>
 
-        {/* Back: the story behind the song, kept image-first — the photo stays
-            as the backdrop and the text sits in a compact panel over it. */}
+        {/* Back: the story behind the song */}
         <div
           className={[
-            "absolute inset-0 overflow-hidden rounded-lg [backface-visibility:hidden] [transform:rotateY(180deg)]",
-            "border border-white/25",
+            "absolute inset-0 overflow-y-auto rounded-lg [backface-visibility:hidden] [transform:rotateY(180deg)]",
+            "border border-white/25 bg-[linear-gradient(160deg,rgba(14,26,45,0.97),rgba(38,20,28,0.97))]",
+            "flex flex-col justify-center px-6 py-6 sm:px-8",
           ].join(" ")}
         >
-          <img
-            src="/news.jpeg"
-            alt=""
-            aria-hidden="true"
-            className="absolute inset-0 h-full w-full object-cover"
-            draggable={false}
-          />
-          <div
-            aria-hidden="true"
-            className="absolute inset-0 bg-[linear-gradient(180deg,rgba(6,13,26,0.15)_0%,rgba(6,13,26,0.55)_45%,rgba(6,13,26,0.92)_100%)]"
-          />
-          <div className="absolute inset-x-0 bottom-0 flex flex-col px-5 pb-4 pt-6 sm:px-6">
-            <span className="font-gp-sans text-[0.58rem] font-semibold uppercase tracking-[0.24em] text-red-400">
-              The Story Behind the Song
-            </span>
-            <h3 className="mt-1 font-gp-display text-[1.2rem] font-bold leading-tight text-white [text-shadow:0_2px_12px_rgba(0,0,0,0.6)]">
-              Poets &amp; Writers
-            </h3>
-            <p className="mt-2 font-gp-sans text-[0.82rem] leading-snug text-white/90 [text-shadow:0_1px_8px_rgba(0,0,0,0.7)]">
-              The author saw a young woman coming from the library and, in that simple
-              moment, imagined the beginning of a great love. That observation inspired
-              <span className="italic"> Poets &amp; Writers</span>, a song about two young
-              people meeting and slowly falling in love — how one fleeting moment can
-              inspire an entire story.
-            </p>
-            <div className="mt-3 flex items-center justify-between">
-              <span className="font-gp-sans text-[0.62rem] uppercase tracking-[0.18em] text-white/70">
-                — From the Author
-              </span>
-              <span className="font-gp-sans text-[0.55rem] uppercase tracking-[0.16em] text-white/45">
-                Tap to flip back
-              </span>
-            </div>
-          </div>
+          <span className="font-gp-sans text-[0.62rem] font-semibold uppercase tracking-[0.24em] text-red-400">
+            The Story Behind the Song
+          </span>
+          <h3 className="mt-2 font-gp-display text-[1.35rem] font-bold leading-tight text-white">
+            Poets &amp; Writers
+          </h3>
+          <p className="mt-4 font-gp-sans text-[0.92rem] leading-relaxed text-white/85">
+            The author saw a young woman coming from the library and, in that simple
+            moment, imagined the beginning of a great love. That observation inspired
+            <span className="italic"> Poets &amp; Writers</span>, a song about two young
+            people meeting and slowly falling in love. It is a reflection on how one
+            fleeting moment can inspire an entire story.
+          </p>
+          <span className="mt-5 font-gp-sans text-[0.72rem] uppercase tracking-[0.18em] text-white/60">
+            — From the Author
+          </span>
+          <span className="mt-4 font-gp-sans text-[0.58rem] uppercase tracking-[0.16em] text-white/40">
+            Tap to flip back
+          </span>
         </div>
       </div>
     </div>
