@@ -20,6 +20,12 @@ import {
   ListenerCount,
   WhatsappContactButton,
 } from "./components";
+import {
+  LiveRadioArt,
+  MusicShowsArt,
+  NewsArt,
+  ShopArt,
+} from "@/components/illustrations/PartnershipArt";
 
 export default function Home() {
   const {
@@ -101,8 +107,42 @@ export default function Home() {
           </a>
         </section>
 
+        {/* What we do — told in pictures, not paragraphs */}
+        <section
+          aria-label="What Golden Pearl Radio offers"
+          className="max-w-[1280px] mx-auto pt-12 grid grid-cols-2 lg:grid-cols-4 gap-4"
+        >
+          {[
+            { art: <LiveRadioArt />, caption: "24/7 Live Radio", href: "/" },
+            { art: <MusicShowsArt />, caption: "Music & Shows", href: "/programme" },
+            { art: <NewsArt />, caption: "News & Stories", href: "/news" },
+            { art: <ShopArt />, caption: "Shop & Partners", href: "/store" },
+          ].map((item) => (
+            <Link
+              key={item.caption}
+              href={item.href}
+              className="group block overflow-hidden rounded-xl border border-white/20 bg-[#F6EFE0] shadow-[0_10px_30px_rgba(0,0,0,0.25)] transition-transform duration-300 hover:scale-[1.03] focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
+            >
+              <div className="transition-transform duration-500 group-hover:scale-[1.05]">
+                {item.art}
+              </div>
+              <div className="border-t border-[#3E5F80]/15 px-3 py-2.5 text-center font-gp-sans text-[0.62rem] font-semibold uppercase tracking-[0.18em] text-[#3E5F80]">
+                {item.caption}
+              </div>
+            </Link>
+          ))}
+        </section>
+
         <div className="max-w-[1280px] mx-auto pt-12 pb-16 grid grid-cols-1 lg:grid-cols-12 gap-6 items-start lg:items-stretch">
           <section className="relative z-20 lg:col-span-4 order-2 lg:order-1">
+            <div className="mb-4">
+              <img
+                src="/board.jpeg"
+                alt="Golden Pearl Radio artwork"
+                className="w-full h-auto rounded-lg"
+                draggable={false}
+              />
+            </div>
             <div className="font-gp-sans text-[0.65rem] font-medium tracking-[0.2em] uppercase text-white/90 mb-4 flex items-center gap-2">
               <ShoppingBag className="h-4 w-4" />
               Promotion

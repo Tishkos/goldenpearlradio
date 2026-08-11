@@ -26,6 +26,12 @@ import {
 } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
 import { supabase } from "@/lib/supabase";
+import {
+  EventPromotionArt,
+  ProductPlacementArt,
+  SponsoredContentArt,
+  PartnershipProgramArt,
+} from "@/components/illustrations/PartnershipArt";
 
 export default function PitchUs() {
   const [activeTab, setActiveTab] = useState("packages");
@@ -107,6 +113,7 @@ export default function PitchUs() {
         "Listener discount codes"
       ],
       icon: <Calendar className="h-6 w-6" />,
+      art: <EventPromotionArt />,
       color: "bg-blue-50 border-blue-200"
     },
     {
@@ -120,6 +127,7 @@ export default function PitchUs() {
         "Monthly performance reports"
       ],
       icon: <Target className="h-6 w-6" />,
+      art: <ProductPlacementArt />,
       color: "bg-radio-cyan/10 border-radio-cyan/30"
     },
     {
@@ -133,6 +141,7 @@ export default function PitchUs() {
         "Brand storytelling integration"
       ],
       icon: <Megaphone className="h-6 w-6" />,
+      art: <SponsoredContentArt />,
       color: "bg-purple-50 border-purple-200"
     },
     {
@@ -146,6 +155,7 @@ export default function PitchUs() {
         "Strategic marketing consultation"
       ],
       icon: <Handshake className="h-6 w-6" />,
+      art: <PartnershipProgramArt />,
       color: "bg-radio-cyan/10 dark:bg-radio-cyan/20 border-radio-cyan/30 dark:border-radio-cyan/20"
     }
   ];
@@ -248,7 +258,10 @@ export default function PitchUs() {
             
             <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
               {partnershipPackages.map((pkg, index) => (
-                <Card key={index} className="group transition-all duration-300 border-2 border-gray-100 dark:border-neutral-800 hover:border-radio-cyan/50 dark:hover:border-radio-cyan/40 bg-white dark:bg-neutral-900 rounded-2xl hover:shadow-xl">
+                <Card key={index} className="group overflow-hidden transition-all duration-300 border-2 border-gray-100 dark:border-neutral-800 hover:border-radio-cyan/50 dark:hover:border-radio-cyan/40 bg-white dark:bg-neutral-900 rounded-2xl hover:shadow-xl">
+                  <div className="border-b border-gray-100 dark:border-neutral-800 transition-transform duration-500 group-hover:scale-[1.03]">
+                    {pkg.art}
+                  </div>
                   <CardHeader className="pb-4">
                     <div className="flex items-center justify-between mb-4">
                       <div className="p-3 rounded-xl bg-radio-cyan/10 dark:bg-radio-cyan/20 group-hover:bg-radio-cyan/15 dark:group-hover:bg-radio-cyan/20 transition-all duration-300">

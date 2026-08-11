@@ -2,7 +2,13 @@ import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
-import { Users, Clock, Target, Building2, MessageCircle } from "lucide-react";
+import { Users, Clock, Target, Building2, MessageCircle, Handshake } from "lucide-react";
+import {
+  EventPromotionArt,
+  ProductPlacementArt,
+  SponsoredContentArt,
+  PartnershipProgramArt,
+} from "@/components/illustrations/PartnershipArt";
 
 const WHATSAPP_NUMBER = "36704066713";
 const WHATSAPP_URL = `https://wa.me/${WHATSAPP_NUMBER}`;
@@ -30,7 +36,7 @@ export default function Contact() {
           </header>
 
           <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-10">
-            <TabsList className="grid grid-cols-2 w-full max-w-md mx-auto h-auto p-2 bg-white/10 border border-white/25 rounded-2xl gap-2 shadow-[0_8px_32px_rgba(0,0,0,0.12)]" style={{ backdropFilter: "blur(28px) saturate(180%)" }}>
+            <TabsList className="grid grid-cols-3 w-full max-w-lg mx-auto h-auto p-2 bg-white/10 border border-white/25 rounded-2xl gap-2 shadow-[0_8px_32px_rgba(0,0,0,0.12)]" style={{ backdropFilter: "blur(28px) saturate(180%)" }}>
               <TabsTrigger
                 value="contact"
                 className="rounded-xl data-[state=active]:bg-white/25 data-[state=active]:border data-[state=active]:border-white/30 data-[state=active]:text-white text-white/90 hover:text-white hover:bg-white/10 transition-all font-gp-sans text-[0.72rem] uppercase tracking-[0.12em] py-3"
@@ -44,6 +50,13 @@ export default function Contact() {
               >
                 <Users className="h-4 w-4 mr-2 inline" />
                 Audience
+              </TabsTrigger>
+              <TabsTrigger
+                value="services"
+                className="rounded-xl data-[state=active]:bg-white/25 data-[state=active]:border data-[state=active]:border-white/30 data-[state=active]:text-white text-white/90 hover:text-white hover:bg-white/10 transition-all font-gp-sans text-[0.72rem] uppercase tracking-[0.12em] py-3"
+              >
+                <Handshake className="h-4 w-4 mr-2 inline" />
+                What We Do
               </TabsTrigger>
             </TabsList>
 
@@ -166,6 +179,35 @@ export default function Contact() {
                     </div>
                   </CardContent>
                 </Card>
+              </div>
+            </TabsContent>
+
+            <TabsContent value="services" className="space-y-8">
+              <div className="text-center mb-6">
+                <h2 className="font-gp-display text-2xl md:text-3xl font-semibold text-white mb-2">What We Do</h2>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                {[
+                  { art: <EventPromotionArt />, caption: "Event Promotion", line: "Your event, announced live on air." },
+                  { art: <ProductPlacementArt />, caption: "Product Placement", line: "Your product, featured in our shop and shows." },
+                  { art: <SponsoredContentArt />, caption: "Sponsored Content", line: "Your story, told by our hosts." },
+                  { art: <PartnershipProgramArt />, caption: "Partnerships", line: "Your brand, side by side with ours." },
+                ].map((item) => (
+                  <div
+                    key={item.caption}
+                    className="overflow-hidden rounded-2xl border border-white/25 bg-[#F6EFE0] shadow-[0_8px_32px_rgba(0,0,0,0.12)] transition-transform duration-300 hover:scale-[1.02]"
+                  >
+                    {item.art}
+                    <div className="border-t border-[#3E5F80]/15 px-4 py-3 text-center">
+                      <div className="font-gp-sans text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-[#3E5F80]">
+                        {item.caption}
+                      </div>
+                      <div className="mt-1 font-gp-serif text-[0.85rem] italic text-[#3E5F80]/75">
+                        {item.line}
+                      </div>
+                    </div>
+                  </div>
+                ))}
               </div>
             </TabsContent>
           </Tabs>
