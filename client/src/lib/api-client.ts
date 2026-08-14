@@ -22,6 +22,7 @@ const PUBLIC_GET_RETRY_PATTERNS = [
   /^\/timeline-items$/,
   /^\/schedule-items$/,
   /^\/listeners\/current$/,
+  /^\/listeners\/map$/,
 ];
 
 function normalizeEndpointPath(endpoint: string): string {

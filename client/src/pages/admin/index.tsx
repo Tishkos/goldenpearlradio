@@ -32,7 +32,8 @@ import {
   Award,
   Newspaper,
   Mic,
-  Sparkles
+  Sparkles,
+  Globe2
 } from "lucide-react";
 
 // Import admin components
@@ -44,6 +45,7 @@ import ProductManagerPage from "./product-manager/index";
 import BreakingNewsPage from "./breaking-news/index";
 import PromotionManagerPage from "./recommendation-manager/index";
 import ScheduleManager from "./schedule-manager/index";
+import ListenersMapPage from "./listeners-map/index";
 
 // Admin dashboard layout component
 export function AdminLayout({ children }: { children: React.ReactNode }) {
@@ -110,6 +112,10 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
                 <Link href="/admin" className={isActive('/admin')}>
                   <BarChart3 className="mr-3 h-5 w-5" />
                   Dashboard
+                </Link>
+                <Link href="/admin/listeners-map" className={isActive('/admin/listeners-map')}>
+                  <Globe2 className="mr-3 h-5 w-5" />
+                  Listeners Map
                 </Link>
                 <Link href="/admin/music-manager" className={isActive('/admin/music-manager')}>
                   <Music className="mr-3 h-5 w-5" />
@@ -704,6 +710,12 @@ export default function AdminDashboard() {
   return (
     <AdminLayout>
       <Switch>
+        <Route path="/admin/listeners-map">
+          <ListenersMapPage />
+        </Route>
+        <Route path="/admin/listeners-map/*">
+          <ListenersMapPage />
+        </Route>
         <Route path="/admin/music-manager">
           <MusicManager />
         </Route>

@@ -11,9 +11,67 @@ import authRoutes from './routes/auth';
 import apiRoutes from './routes/api';
 import uploadRoutes from './routes/upload';
 import streamRoutes from './routes/stream';
+import geoip from 'fast-geoip';
 import { ensureScheduleTables, listScheduleItems, markScheduleItemInterested } from './utils/scheduleItems';
 
 dotenv.config();
+
+// --- LISTENER GEOLOCATION ---
+interface ListenerGeo {
+  country: string;      // ISO country code, e.g. "AE"
+  city: string;
+  lat: number;
+  lon: number;
+}
+
+// The backend sits behind two nginx proxies (host TLS -> container -> node), so the
+// real client address is the FIRST entry of X-Forwarded-For, not the socket address.
+function getClientIp(req: Request): string {
+  const forwarded = req.headers['x-forwarded-for'];
+  const raw = Array.isArray(forwarded) ? forwarded[0] : forwarded;
+  const first = raw?.split(',')[0]?.trim();
+  const ip = first || req.socket.remoteAddress || '';
+  return ip.replace(/^::ffff:/, '');
+}
+
+function isPrivateIp(ip: string): boolean {
+  return (
+    ip === '' ||
+    ip === '::1' ||
+    ip.startsWith('127.') ||
+    ip.startsWith('10.') ||
+    ip.startsWith('192.168.') ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(ip) ||
+    ip.startsWith('fc') ||
+    ip.startsWith('fe80')
+  );
+}
+
+const geoCache = new Map<string, ListenerGeo | null>();
+
+async function lookupListenerGeo(ip: string): Promise<ListenerGeo | null> {
+  if (isPrivateIp(ip)) return null;
+  if (geoCache.has(ip)) return geoCache.get(ip) ?? null;
+  try {
+    const info = await geoip.lookup(ip);
+    const geo: ListenerGeo | null =
+      info && Array.isArray(info.ll) && (info.ll[0] !== 0 || info.ll[1] !== 0)
+        ? {
+            country: info.country || 'Unknown',
+            city: info.city || info.region || 'Unknown',
+            lat: info.ll[0],
+            lon: info.ll[1],
+          }
+        : null;
+    // Cap the cache so a scan of many unique IPs cannot grow memory unbounded
+    if (geoCache.size > 10000) geoCache.clear();
+    geoCache.set(ip, geo);
+    return geo;
+  } catch (error) {
+    console.error(`Geo lookup failed for ${ip}:`, error);
+    return null;
+  }
+}
 
 // --- CONFIGURATION ---
 const AUDIO_FORMAT = {
@@ -164,10 +222,82 @@ app.get('/api/listeners/current', async (req: Request, res: Response) => {
     
     // Total count = stream connections + active website listeners
     const totalCount = streamConnections + activeListeners.length;
-    
+
     res.json({ count: totalCount });
   } catch (error: any) {
     console.error('Error getting listener count:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Live listener world map data (city-level aggregates only — never exposes IPs)
+app.get('/api/listeners/map', async (req: Request, res: Response) => {
+  try {
+    const streamer = streamers.get('1');
+    const httpClients: Map<string, HttpClient> | undefined = streamer
+      ? (streamer as any).httpClients
+      : undefined;
+
+    // One entry per distinct listener. Browser listeners hold an open /stream
+    // connection AND send heartbeats, so dedupe website pings against stream IPs.
+    const seenIps = new Set<string>();
+    const entries: { geo: ListenerGeo | null | undefined }[] = [];
+
+    if (httpClients) {
+      for (const client of httpClients.values()) {
+        if (client.ip) seenIps.add(client.ip);
+        entries.push({ geo: client.geo });
+      }
+    }
+
+    const now = Date.now();
+    for (const listener of activeWebsiteListeners.values()) {
+      if (now - listener.lastPing >= 10000 || !listener.isPlaying) continue;
+      if (listener.ip && seenIps.has(listener.ip)) continue;
+      if (listener.ip) seenIps.add(listener.ip);
+      entries.push({ geo: listener.geo });
+    }
+
+    // Aggregate to city buckets
+    const buckets = new Map<
+      string,
+      { city: string; country: string; lat: number; lon: number; count: number }
+    >();
+    let unlocated = 0;
+    for (const entry of entries) {
+      const geo = entry.geo;
+      if (!geo) {
+        unlocated++;
+        continue;
+      }
+      const key = `${geo.country}|${geo.city}|${geo.lat.toFixed(1)},${geo.lon.toFixed(1)}`;
+      const bucket = buckets.get(key);
+      if (bucket) {
+        bucket.count++;
+      } else {
+        buckets.set(key, {
+          city: geo.city,
+          country: geo.country,
+          lat: geo.lat,
+          lon: geo.lon,
+          count: 1,
+        });
+      }
+    }
+
+    const locations = Array.from(buckets.values()).sort((a, b) => b.count - a.count);
+    const countries = new Set(locations.map((l) => l.country)).size;
+
+    res.json({
+      total: entries.length,
+      located: entries.length - unlocated,
+      unlocated,
+      countries,
+      locations,
+      updatedAt: now,
+    });
+  } catch (error: any) {
+    console.error('Error building listener map:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -467,13 +597,26 @@ app.post('/api/listeners/ping', async (req: Request, res: Response) => {
     if (!listenerId) {
       return res.status(400).json({ error: 'listenerId is required' });
     }
-    
+
+    const ip = getClientIp(req);
+    const previous = activeWebsiteListeners.get(listenerId);
+
     // Update or create listener entry
     activeWebsiteListeners.set(listenerId, {
       id: listenerId,
       lastPing: Date.now(),
       isPlaying: Boolean(isPlaying),
+      ip,
+      geo: previous?.ip === ip ? previous.geo : undefined,
     });
+
+    const current = activeWebsiteListeners.get(listenerId);
+    if (current && current.geo === undefined) {
+      void lookupListenerGeo(ip).then((geo) => {
+        const entry = activeWebsiteListeners.get(listenerId);
+        if (entry && entry.ip === ip) entry.geo = geo;
+      });
+    }
     
     res.json({ success: true });
   } catch (error: any) {
@@ -515,6 +658,9 @@ interface DBShowItem {
 interface HttpClient {
   id: string;
   response: Response;
+  ip?: string;
+  geo?: ListenerGeo | null;
+  connectedAt?: number;
 }
 
 // A unified object representing any playable item on the timeline
@@ -556,9 +702,17 @@ class RadioStreamer {
   }
 
   // --- Client Management ---
-  public addHttpClient(response: Response): string {
+  public addHttpClient(response: Response, ip?: string): string {
     const clientId = randomUUID();
-    this.httpClients.set(clientId, { id: clientId, response });
+    const client: HttpClient = { id: clientId, response, ip, connectedAt: Date.now() };
+    this.httpClients.set(clientId, client);
+    if (ip) {
+      // Resolve asynchronously so connecting a listener never waits on geo data
+      void lookupListenerGeo(ip).then((geo) => {
+        const existing = this.httpClients.get(clientId);
+        if (existing) existing.geo = geo;
+      });
+    }
     console.log(`[Station ${this.stationId}] Listener connected. Total: ${this.httpClients.size}`);
     
     // If this is the first listener, start the engine
@@ -1837,6 +1991,8 @@ interface ActiveListener {
   id: string;
   lastPing: number;
   isPlaying: boolean;
+  ip?: string;
+  geo?: ListenerGeo | null; // undefined = lookup pending, null = unresolvable
 }
 
 export const activeWebsiteListeners = new Map<string, ActiveListener>();
@@ -1865,7 +2021,7 @@ app.get('/stream', async (req: Request, res: Response) => {
     }
 
     // Add this client to the streamer
-    streamer.addHttpClient(res);
+    streamer.addHttpClient(res, getClientIp(req));
 
     // Handle client disconnect
     req.on('close', () => {
