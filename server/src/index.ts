@@ -49,6 +49,31 @@ function isPrivateIp(ip: string): boolean {
 
 const geoCache = new Map<string, ListenerGeo | null>();
 
+// Rolling 24h log of located listeners (keyed by IP) so the admin map can show
+// where recent listeners were, not just who is connected this second.
+const RECENT_SIGHTING_TTL_MS = 24 * 60 * 60 * 1000;
+const recentSightings = new Map<string, { geo: ListenerGeo; lastSeen: number }>();
+
+function recordSighting(ip: string | undefined, geo: ListenerGeo | null | undefined) {
+  if (!ip || !geo) return;
+  recentSightings.set(ip, { geo, lastSeen: Date.now() });
+}
+
+function pruneSightings() {
+  const cutoff = Date.now() - RECENT_SIGHTING_TTL_MS;
+  for (const [ip, sighting] of recentSightings.entries()) {
+    if (sighting.lastSeen < cutoff) recentSightings.delete(ip);
+  }
+  if (recentSightings.size > 5000) {
+    const oldestFirst = [...recentSightings.entries()].sort(
+      (a, b) => a[1].lastSeen - b[1].lastSeen
+    );
+    for (const [ip] of oldestFirst.slice(0, recentSightings.size - 5000)) {
+      recentSightings.delete(ip);
+    }
+  }
+}
+
 async function lookupListenerGeo(ip: string): Promise<ListenerGeo | null> {
   if (isPrivateIp(ip)) return null;
   if (geoCache.has(ip)) return geoCache.get(ip) ?? null;
@@ -241,12 +266,12 @@ app.get('/api/listeners/map', async (req: Request, res: Response) => {
     // One entry per distinct listener. Browser listeners hold an open /stream
     // connection AND send heartbeats, so dedupe website pings against stream IPs.
     const seenIps = new Set<string>();
-    const entries: { geo: ListenerGeo | null | undefined }[] = [];
+    const entries: { ip?: string; geo: ListenerGeo | null | undefined }[] = [];
 
     if (httpClients) {
       for (const client of httpClients.values()) {
         if (client.ip) seenIps.add(client.ip);
-        entries.push({ geo: client.geo });
+        entries.push({ ip: client.ip, geo: client.geo });
       }
     }
 
@@ -255,45 +280,54 @@ app.get('/api/listeners/map', async (req: Request, res: Response) => {
       if (now - listener.lastPing >= 10000 || !listener.isPlaying) continue;
       if (listener.ip && seenIps.has(listener.ip)) continue;
       if (listener.ip) seenIps.add(listener.ip);
-      entries.push({ geo: listener.geo });
+      entries.push({ ip: listener.ip, geo: listener.geo });
     }
+
+    // Long-lived stream connections never re-ping, so refresh their sightings here
+    for (const entry of entries) recordSighting(entry.ip, entry.geo);
+    pruneSightings();
 
     // Aggregate to city buckets
-    const buckets = new Map<
-      string,
-      { city: string; country: string; lat: number; lon: number; count: number }
-    >();
-    let unlocated = 0;
-    for (const entry of entries) {
-      const geo = entry.geo;
-      if (!geo) {
-        unlocated++;
-        continue;
+    const aggregate = (geos: ListenerGeo[]) => {
+      const buckets = new Map<
+        string,
+        { city: string; country: string; lat: number; lon: number; count: number }
+      >();
+      for (const geo of geos) {
+        const key = `${geo.country}|${geo.city}|${geo.lat.toFixed(1)},${geo.lon.toFixed(1)}`;
+        const bucket = buckets.get(key);
+        if (bucket) {
+          bucket.count++;
+        } else {
+          buckets.set(key, {
+            city: geo.city,
+            country: geo.country,
+            lat: geo.lat,
+            lon: geo.lon,
+            count: 1,
+          });
+        }
       }
-      const key = `${geo.country}|${geo.city}|${geo.lat.toFixed(1)},${geo.lon.toFixed(1)}`;
-      const bucket = buckets.get(key);
-      if (bucket) {
-        bucket.count++;
-      } else {
-        buckets.set(key, {
-          city: geo.city,
-          country: geo.country,
-          lat: geo.lat,
-          lon: geo.lon,
-          count: 1,
-        });
-      }
-    }
+      return Array.from(buckets.values()).sort((a, b) => b.count - a.count);
+    };
 
-    const locations = Array.from(buckets.values()).sort((a, b) => b.count - a.count);
+    const liveGeos = entries.map((e) => e.geo).filter((g): g is ListenerGeo => Boolean(g));
+    const unlocated = entries.length - liveGeos.length;
+    const locations = aggregate(liveGeos);
     const countries = new Set(locations.map((l) => l.country)).size;
+
+    // Everyone located within the last 24h (one entry per distinct IP)
+    const recentGeos = Array.from(recentSightings.values()).map((s) => s.geo);
+    const recent = aggregate(recentGeos);
 
     res.json({
       total: entries.length,
-      located: entries.length - unlocated,
+      located: liveGeos.length,
       unlocated,
       countries,
       locations,
+      recentTotal: recentGeos.length,
+      recent,
       updatedAt: now,
     });
   } catch (error: any) {
@@ -613,6 +647,7 @@ app.post('/api/listeners/ping', async (req: Request, res: Response) => {
     const current = activeWebsiteListeners.get(listenerId);
     if (current && current.geo === undefined) {
       void lookupListenerGeo(ip).then((geo) => {
+        recordSighting(ip, geo);
         const entry = activeWebsiteListeners.get(listenerId);
         if (entry && entry.ip === ip) entry.geo = geo;
       });
@@ -709,6 +744,7 @@ class RadioStreamer {
     if (ip) {
       // Resolve asynchronously so connecting a listener never waits on geo data
       void lookupListenerGeo(ip).then((geo) => {
+        recordSighting(ip, geo);
         const existing = this.httpClients.get(clientId);
         if (existing) existing.geo = geo;
       });

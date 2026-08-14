@@ -19,6 +19,8 @@ interface ListenerMapData {
   unlocated: number;
   countries: number;
   locations: MapLocation[];
+  recentTotal: number;
+  recent: MapLocation[];
   updatedAt: number;
 }
 
@@ -28,8 +30,12 @@ const EMPTY_MAP_DATA: ListenerMapData = {
   unlocated: 0,
   countries: 0,
   locations: [],
+  recentTotal: 0,
+  recent: [],
   updatedAt: 0,
 };
+
+type MapView = "live" | "recent";
 
 const regionNames = (() => {
   try {
@@ -64,7 +70,7 @@ function displayCity(location: MapLocation): string {
 
 // Proportional symbol: area encodes magnitude, so radius grows with sqrt(count)
 function dotRadius(count: number): number {
-  return Math.min(4 + Math.sqrt(count) * 3.2, 19);
+  return Math.min(2.5 + Math.sqrt(count) * 1.8, 12);
 }
 
 interface TooltipState {
@@ -76,6 +82,7 @@ interface TooltipState {
 export default function ListenersMapPage() {
   const containerRef = useRef<HTMLDivElement>(null);
   const [tooltip, setTooltip] = useState<TooltipState | null>(null);
+  const [view, setView] = useState<MapView>("live");
 
   const { data, dataUpdatedAt } = useQuery<ListenerMapData>({
     queryKey: ["listeners", "map"],
@@ -92,7 +99,11 @@ export default function ListenersMapPage() {
   });
 
   const mapData = data || EMPTY_MAP_DATA;
-  const topLocation = mapData.locations[0];
+  const isLive = view === "live";
+  const activeLocations = (isLive ? mapData.locations : mapData.recent) || [];
+  const activeTotal = isLive ? mapData.total : mapData.recentTotal || 0;
+  const activeCountries = new Set(activeLocations.map((l) => l.country)).size;
+  const topLocation = activeLocations[0];
   const maxCount = topLocation?.count || 1;
 
   const geographies = useMemo(() => worldTopology as any, []);
@@ -109,18 +120,18 @@ export default function ListenersMapPage() {
 
   const statTiles = [
     {
-      title: "Live Listeners",
-      value: mapData.total.toString(),
+      title: isLive ? "Live Listeners" : "Listeners (24h)",
+      value: activeTotal.toString(),
       icon: <Users className="h-6 w-6" />,
     },
     {
       title: "Countries",
-      value: mapData.countries.toString(),
+      value: activeCountries.toString(),
       icon: <Globe2 className="h-6 w-6" />,
     },
     {
       title: "Locations",
-      value: mapData.locations.length.toString(),
+      value: activeLocations.length.toString(),
       icon: <MapPin className="h-6 w-6" />,
     },
     {
@@ -197,22 +208,41 @@ export default function ListenersMapPage() {
       <div className="mt-8 grid grid-cols-1 gap-6 xl:grid-cols-3">
         {/* World map */}
         <div className="gp-card p-7 xl:col-span-2">
-          <div className="mb-4 flex items-center justify-between">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
             <div className="font-gp-sans text-[0.65rem] uppercase tracking-[0.2em] text-[var(--gp-gold-bright)] flex items-center gap-2">
               <Globe2 className="h-5 w-5" />
-              Live Listener Map
+              Listener Map
             </div>
-            <div className="font-gp-serif text-sm italic text-[color:var(--gp-muted)]">
-              Dot size = listeners · scroll to zoom, drag to pan
+            <div className="flex rounded-[2px] border border-[var(--gp-border-gold)] bg-[rgba(6,13,26,0.5)] p-1">
+              {([
+                { key: "live", label: "Live" },
+                { key: "recent", label: "Last 24h" },
+              ] as { key: MapView; label: string }[]).map((option) => (
+                <button
+                  key={option.key}
+                  onClick={() => {
+                    setView(option.key);
+                    setTooltip(null);
+                  }}
+                  className={[
+                    "px-3 py-1 rounded-[2px] font-gp-sans text-[0.68rem] uppercase tracking-[0.12em] transition-colors",
+                    view === option.key
+                      ? "bg-[var(--gp-gold)] text-[var(--gp-navy-deep)]"
+                      : "text-[color:var(--gp-white)]/75 hover:text-[var(--gp-gold-bright)]",
+                  ].join(" ")}
+                >
+                  {option.label}
+                </button>
+              ))}
             </div>
           </div>
 
           <div ref={containerRef} className="relative overflow-hidden rounded-[2px] bg-[rgba(4,9,19,0.6)]">
             <ComposableMap
-              projection="geoNaturalEarth1"
-              projectionConfig={{ scale: 172, center: [12, 6] }}
+              projection="geoEquirectangular"
+              projectionConfig={{ scale: 140, center: [10, 12] }}
               width={880}
-              height={470}
+              height={400}
               style={{ width: "100%", height: "auto" }}
             >
               <ZoomableGroup minZoom={1} maxZoom={8}>
@@ -237,7 +267,7 @@ export default function ListenersMapPage() {
                   }
                 </Geographies>
 
-                {mapData.locations.map((location) => {
+                {activeLocations.map((location) => {
                   const r = dotRadius(location.count);
                   return (
                     <Marker
@@ -281,13 +311,15 @@ export default function ListenersMapPage() {
               </div>
             )}
 
-            {mapData.locations.length === 0 && (
+            {activeLocations.length === 0 && (
               <div className="pointer-events-none absolute inset-0 grid place-items-center">
                 <div className="rounded-[2px] border border-[var(--gp-border-gold)]/50 bg-[rgba(6,13,26,0.85)] px-6 py-4 text-center">
                   <p className="font-gp-sans text-sm text-[color:var(--gp-white)]/90">
-                    {mapData.total > 0
-                      ? "Locating listeners…"
-                      : "No one is tuned in right now"}
+                    {!isLive
+                      ? "No listeners located in the last 24 hours"
+                      : mapData.total > 0
+                        ? "Locating listeners…"
+                        : "No one is tuned in right now"}
                   </p>
                   <p className="mt-1 font-gp-serif text-xs italic text-[color:var(--gp-muted)]">
                     Listener locations appear here the moment someone presses play
@@ -297,12 +329,16 @@ export default function ListenersMapPage() {
             )}
           </div>
 
-          {mapData.unlocated > 0 && (
-            <p className="mt-3 font-gp-serif text-xs italic text-[color:var(--gp-muted)]">
-              {mapData.unlocated} listener{mapData.unlocated === 1 ? "" : "s"} could not be
-              placed on the map (private network or unresolved location).
-            </p>
-          )}
+          <p className="mt-3 font-gp-serif text-xs italic text-[color:var(--gp-muted)]">
+            Dot size = listeners · scroll to zoom, drag to pan
+            {isLive && mapData.unlocated > 0 && (
+              <>
+                {" · "}
+                {mapData.unlocated} listener{mapData.unlocated === 1 ? "" : "s"} could not be
+                placed on the map
+              </>
+            )}
+          </p>
         </div>
 
         {/* Top locations — table view of the map data */}
@@ -312,9 +348,9 @@ export default function ListenersMapPage() {
             Top Locations
           </div>
 
-          {mapData.locations.length > 0 ? (
+          {activeLocations.length > 0 ? (
             <div className="space-y-3 max-h-[430px] overflow-y-auto pr-1">
-              {mapData.locations.slice(0, 20).map((location, i) => (
+              {activeLocations.slice(0, 20).map((location, i) => (
                 <div
                   key={`${location.country}-${location.city}-${i}`}
                   className="rounded-[2px] border border-[var(--gp-border-gold)]/40 bg-[rgba(6,13,26,0.5)] px-4 py-3"
