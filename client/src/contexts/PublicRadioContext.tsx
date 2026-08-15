@@ -200,14 +200,17 @@ export function PublicRadioProvider({ children }: { children: React.ReactNode })
 
   const audioContextRef = useRef<AudioContext | null>(null);
   const playback = useAudioPlayback(audioRef, audioContextRef);
-  const setupUserInteractionListener = playback.setupUserInteractionListener;
   const playAudio = playback.play;
   const pauseAudio = playback.pause;
   const setAudioVolume = playback.setVolume;
   const setAudioMuted = playback.setMuted;
   useListenerTracking(isPlaying, api);
 
-  useEffect(() => setupUserInteractionListener(), [setupUserInteractionListener]);
+  // NOTE: deliberately NOT using playback.setupUserInteractionListener here.
+  // It resumed the stale buffered stream with a plain audio.play() on every
+  // click — wrong for live radio, and it raced the resumeOnGesture handler
+  // below: connectLiveStream's load() aborted its play() (AbortError) and
+  // vice versa, so playback never started at all.
 
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), POLLING_INTERVALS.TIME_UPDATE);
@@ -564,27 +567,42 @@ export function PublicRadioProvider({ children }: { children: React.ReactNode })
 
   // Join the live broadcast at "now". The cache-buster guarantees the browser
   // opens a fresh connection instead of resuming a stale buffered position.
+  // Serialized: gesture handlers, the watchdog, the auto-connect retry and
+  // error handlers can all request a (re)connect at the same moment, and every
+  // extra load() aborts the in-flight play() of the previous attempt
+  // (AbortError storm, no audio). Concurrent callers share one attempt.
+  const connectInFlightRef = useRef<Promise<boolean> | null>(null);
   const connectLiveStream = useCallback(async () => {
+    if (connectInFlightRef.current) return connectInFlightRef.current;
     const audio = audioRef.current;
     if (!audio) return false;
 
-    audio.src = `${liveStreamUrl}?t=${Date.now()}`;
-    audio.playbackRate = 1.0;
-    audio.defaultPlaybackRate = 1.0;
-    audio.load();
-
-    const didPlay = await playAudio();
-    if (didPlay) {
-      setIsPlaying(true);
-      lastProgressRef.current = { time: -1, at: Date.now() };
-    } else {
-      // Autoplay blocked or stream unavailable: drop the connection so we do
-      // not keep buffering; a user gesture or the auto-connect retry rejoins.
-      audio.removeAttribute("src");
+    const attempt = (async () => {
+      audio.src = `${liveStreamUrl}?t=${Date.now()}`;
+      audio.playbackRate = 1.0;
+      audio.defaultPlaybackRate = 1.0;
       audio.load();
-      setIsPlaying(false);
+
+      const didPlay = await playAudio();
+      if (didPlay) {
+        setIsPlaying(true);
+        lastProgressRef.current = { time: -1, at: Date.now() };
+      } else {
+        // Autoplay blocked or stream unavailable: drop the connection so we do
+        // not keep buffering; a user gesture or the auto-connect retry rejoins.
+        audio.removeAttribute("src");
+        audio.load();
+        setIsPlaying(false);
+      }
+      return didPlay;
+    })();
+
+    connectInFlightRef.current = attempt;
+    try {
+      return await attempt;
+    } finally {
+      connectInFlightRef.current = null;
     }
-    return didPlay;
   }, [liveStreamUrl, playAudio]);
 
   const disconnectLiveStream = useCallback(() => {

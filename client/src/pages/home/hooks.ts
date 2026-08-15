@@ -100,6 +100,11 @@ export function useAudioPlayback(
         console.log('Autoplay blocked, waiting for user interaction...');
         return false;
       }
+      if (err.name === 'AbortError') {
+        // A newer load()/connect superseded this attempt — not a failure of
+        // the stream, just this attempt being cancelled. The caller retries.
+        return false;
+      }
       console.error('Play failed:', err);
       return false;
     }
