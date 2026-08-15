@@ -9,6 +9,7 @@ import fs from 'fs';
 import { prisma } from '../../lib/prisma';
 import authRoutes from './routes/auth';
 import apiRoutes from './routes/api';
+import { authenticateToken, requireAdmin } from './middleware/auth';
 import uploadRoutes from './routes/upload';
 import streamRoutes from './routes/stream';
 import geoip from 'fast-geoip';
@@ -229,8 +230,9 @@ ensureScheduleTables().catch((error) => {
   console.error('Failed to ensure schedule tables:', error);
 });
 
-// Public listener stats endpoint (no auth required)
-app.get('/api/listeners/current', async (req: Request, res: Response) => {
+// Listener stats are for the admin dashboard only — the public site must not
+// see (or be able to query) how many people are listening.
+app.get('/api/listeners/current', authenticateToken, requireAdmin, async (req: Request, res: Response) => {
   try {
     const streamerKey = '1'; // Default streamer
     const streamer = streamers.get(streamerKey);
@@ -256,7 +258,7 @@ app.get('/api/listeners/current', async (req: Request, res: Response) => {
 });
 
 // Live listener world map data (city-level aggregates only — never exposes IPs)
-app.get('/api/listeners/map', async (req: Request, res: Response) => {
+app.get('/api/listeners/map', authenticateToken, requireAdmin, async (req: Request, res: Response) => {
   try {
     const streamer = streamers.get('1');
     const httpClients: Map<string, HttpClient> | undefined = streamer
@@ -717,6 +719,19 @@ class RadioStreamer {
   private httpClients = new Map<string, HttpClient>();
   private mainFfmpegProcess: ChildProcess | null = null;
 
+  // Rolling buffer of the most recently encoded MP3 bytes. New listeners get
+  // this burst immediately on connect (like Icecast burst-on-connect), so their
+  // player starts with ~10s of cushion instead of zero. Without it, every
+  // listener runs exactly at the live edge and any network jitter is an
+  // audible stutter.
+  private recentEncodedChunks: Buffer[] = [];
+  private recentEncodedBytes = 0;
+  private static readonly BURST_BUFFER_BYTES = 240_000; // ~10s at 192kbps
+  // A client whose socket has stalled long enough to queue this much unsent
+  // audio is dead weight; drop it and let the player's reconnect logic rejoin.
+  private static readonly MAX_CLIENT_BACKLOG_BYTES = 4_000_000;
+  private encoderRestartPending = false;
+
   private isPlaying = false;
   private showTime = 0; // Master clock for the current show in seconds
   private audioEngineInterval: NodeJS.Timeout | null = null;
@@ -725,6 +740,8 @@ class RadioStreamer {
   
   private currentShow: any = null; // Holds the full scheduled_show object
   private timelineItems: TimelineItem[] = [];
+  private timelineSignature = '';
+  private lastFullTimelineBuildMs = 0;
   private audioCache = new Map<string, Int16Array>(); // Cache for decoded raw audio data, keyed by audio URL
   private audioLoadPromises = new Map<string, Promise<Int16Array | null>>();
   private showStartTime: Date | null = null; // When the current show started (for synchronization)
@@ -750,17 +767,43 @@ class RadioStreamer {
       });
     }
     console.log(`[Station ${this.stationId}] Listener connected. Total: ${this.httpClients.size}`);
-    
+
+    // Send headers plus the rolling burst buffer right away so the player can
+    // begin decoding with a multi-second cushion instead of waiting for the
+    // next encoded chunk at exactly realtime rate.
+    try {
+      response.socket?.setNoDelay(true);
+      this.beginClientResponse(client);
+      for (const chunk of this.recentEncodedChunks) {
+        if (!response.writable || response.destroyed) break;
+        response.write(chunk);
+      }
+    } catch {
+      // Socket died during connect; the close handler will clean up.
+    }
+
     // If this is the first listener, start the engine
     // The stream runs continuously - all listeners receive the same synchronized audio
     if (!this.isPlaying) {
       this.start();
-    } else {
-      // If stream is already running, new client will receive the current synchronized stream
-      // Headers will be sent when first chunk arrives
-      console.log(`[Station ${this.stationId}] New listener joining existing stream.`);
     }
     return clientId;
+  }
+
+  private beginClientResponse(client: HttpClient) {
+    if (client.response.headersSent) return;
+    client.response.writeHead(200, {
+      'Content-Type': 'audio/mpeg',
+      'Cache-Control': 'no-cache, no-store, must-revalidate',
+      'Pragma': 'no-cache',
+      'Expires': '0',
+      'Connection': 'keep-alive',
+      'Transfer-Encoding': 'chunked',
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Headers': 'Range',
+      'X-Accel-Buffering': 'no',
+    });
+    client.response.flushHeaders?.();
   }
 
   public removeHttpClient(clientId: string) {
@@ -794,8 +837,9 @@ class RadioStreamer {
 
     // Launch FFmpeg encoder first - stream must always be running
     this.launchMainFfmpegEncoder();
-    
+
     // Load initial schedule
+    await this.refreshProcessedFilesCache();
     await this.loadScheduleAndBuildTimeline();
     
     // Start the audio engine - it will handle silence if no show is scheduled
@@ -834,6 +878,10 @@ class RadioStreamer {
     // Clear state
     this.showTime = 0;
     this.nextAudioFrameTime = null;
+    this.recentEncodedChunks = [];
+    this.recentEncodedBytes = 0;
+    this.timelineSignature = '';
+    this.lastFullTimelineBuildMs = 0;
     this.audioCache.clear();
     this.audioLoadPromises.clear();
     this.timelineItems = [];
@@ -855,6 +903,7 @@ class RadioStreamer {
   private async checkForNewShow() {
     // Reload today's timeline items to pick up any changes (new items, updates, etc.)
     // This ensures the stream always plays the latest published playlist
+    await this.refreshProcessedFilesCache();
     await this.loadScheduleAndBuildTimeline();
   }
   
@@ -897,11 +946,12 @@ class RadioStreamer {
             });
         }
 
-        // Handle FFmpeg process exit
+        // Handle FFmpeg process exit. Do NOT drop the connected listeners here:
+        // the stdout 'end' handler restarts the encoder and clients simply keep
+        // reading the same response — MP3 decoders resync on the next frame.
         this.mainFfmpegProcess.on('exit', (code, signal) => {
             if (code !== 0 && code !== null) {
-                console.error(`[Station ${this.stationId}] FFmpeg process exited with code ${code}`);
-                this.broadcastError("Audio encoding failed. FFmpeg process exited unexpectedly.");
+                console.error(`[Station ${this.stationId}] FFmpeg encoder exited with code ${code} (signal ${signal ?? 'none'}); restarting.`);
             }
         });
 
@@ -912,14 +962,7 @@ class RadioStreamer {
                 console.error(`[Station ${this.stationId}] See FFMPEG_SETUP.md for installation instructions.`);
                 console.error(`[Station ${this.stationId}] You can also set FFMPEG_PATH environment variable to point to FFmpeg executable.`);
             }
-            this.broadcastError("FFmpeg is not available. Audio streaming requires FFmpeg to be installed.");
-            // Try to restart FFmpeg after a delay
-            setTimeout(() => {
-                if (this.isPlaying) {
-                    console.log(`[Station ${this.stationId}] Attempting to restart FFmpeg...`);
-                    this.launchMainFfmpegEncoder();
-                }
-            }, 2000);
+            this.scheduleEncoderRestart(2000);
         });
     } catch (error) {
         console.error(`[Station ${this.stationId}] Failed to launch FFmpeg:`, error);
@@ -931,35 +974,38 @@ class RadioStreamer {
   // Reads the MP3 data from FFmpeg's stdout and sends it to all connected listeners
   // All clients receive the same synchronized stream data - like a real radio station
   private async pipeFfmpegOutputToClients() {
-    if (!this.mainFfmpegProcess || !this.mainFfmpegProcess.stdout) return;
-    
-    this.mainFfmpegProcess.stdout.on('data', (chunk: Buffer) => {
+    const proc = this.mainFfmpegProcess;
+    if (!proc || !proc.stdout) return;
+
+    proc.stdout.on('data', (chunk: Buffer) => {
+        // Maintain the burst buffer for future connects
+        this.recentEncodedChunks.push(chunk);
+        this.recentEncodedBytes += chunk.length;
+        while (
+          this.recentEncodedBytes > RadioStreamer.BURST_BUFFER_BYTES &&
+          this.recentEncodedChunks.length > 1
+        ) {
+          const dropped = this.recentEncodedChunks.shift()!;
+          this.recentEncodedBytes -= dropped.length;
+        }
+
         // Broadcast the same chunk to all connected clients simultaneously
-        // This ensures all listeners hear the same thing at the same time
         for (const client of this.httpClients.values()) {
             try {
-                if (!client.response.headersSent) {
-                    // Set headers for streaming MP3
-                    client.response.writeHead(200, {
-                        'Content-Type': 'audio/mpeg',
-                        'Cache-Control': 'no-cache, no-store, must-revalidate',
-                        'Pragma': 'no-cache',
-                        'Expires': '0',
-                        'Connection': 'keep-alive',
-                        'Transfer-Encoding': 'chunked',
-                        'Access-Control-Allow-Origin': '*',
-                        'Access-Control-Allow-Headers': 'Range',
-                        'X-Accel-Buffering': 'no',
-                    });
-                    client.response.flushHeaders?.();
-                }
-                // Write the same chunk to all clients - synchronized broadcast
-                if (client.response.writable && !client.response.destroyed) {
-                    client.response.write(chunk);
-                } else {
-                    // Response is not writable, remove client
+                this.beginClientResponse(client);
+                if (!client.response.writable || client.response.destroyed) {
                     this.removeHttpClient(client.id);
+                    continue;
                 }
+                // A stalled socket keeps queueing audio in server memory; cut it
+                // off once the backlog is clearly hopeless.
+                if (client.response.writableLength > RadioStreamer.MAX_CLIENT_BACKLOG_BYTES) {
+                    console.warn(`[Station ${this.stationId}] Dropping stalled listener ${client.id} (${client.response.writableLength} bytes queued).`);
+                    try { client.response.destroy(); } catch {}
+                    this.removeHttpClient(client.id);
+                    continue;
+                }
+                client.response.write(chunk);
             } catch (error: any) {
                 // Client likely disconnected, remove them
                 if (error.code !== 'EPIPE' && error.code !== 'ECONNRESET') {
@@ -970,22 +1016,35 @@ class RadioStreamer {
         }
     });
 
-    this.mainFfmpegProcess.stdout.on('end', () => {
-        console.log(`[Station ${this.stationId}] FFmpeg stdout ended - stream stopped`);
-        // Don't stop the stream - try to restart FFmpeg
-        if (this.isPlaying) {
-            console.log(`[Station ${this.stationId}] Attempting to restart FFmpeg...`);
-            try {
-                this.launchMainFfmpegEncoder();
-            } catch (error) {
-                console.error(`[Station ${this.stationId}] Failed to restart FFmpeg:`, error);
-            }
-        }
+    proc.stdout.on('end', () => {
+        // Only the currently-active encoder may trigger a restart; a stale
+        // process ending after a replacement was launched must be ignored.
+        if (this.mainFfmpegProcess !== proc) return;
+        console.log(`[Station ${this.stationId}] FFmpeg stdout ended - restarting encoder`);
+        this.scheduleEncoderRestart(1000);
     });
 
-    this.mainFfmpegProcess.stdout.on('error', (error) => {
+    proc.stdout.on('error', (error) => {
         console.error(`[Station ${this.stationId}] Error reading from FFmpeg stdout:`, error);
     });
+  }
+
+  // Restart the encoder once, even if several failure events fire together.
+  // Listeners stay connected throughout; they just get a short gap in audio.
+  private scheduleEncoderRestart(delayMs: number) {
+    if (this.encoderRestartPending) return;
+    this.encoderRestartPending = true;
+    setTimeout(() => {
+        this.encoderRestartPending = false;
+        if (!this.isPlaying) return;
+        console.log(`[Station ${this.stationId}] Restarting FFmpeg encoder...`);
+        try {
+            this.launchMainFfmpegEncoder();
+        } catch (error) {
+            console.error(`[Station ${this.stationId}] Failed to restart FFmpeg:`, error);
+            this.scheduleEncoderRestart(5000);
+        }
+    }, delayMs);
   }
   
   // --- Audio Engine: The Heart of the Streamer ---
@@ -1111,13 +1170,14 @@ class RadioStreamer {
   private mixAudioForTick(activeItems: TimelineItem[]): Buffer {
     // Calculate currentTimeSeconds for debug logging
     const currentTimeSeconds = Math.floor(this.showTime);
-    // Create a silent buffer. We will add all active sounds to this.
-    // If no items are active, this remains silence - stream keeps running
-    const mixedBuffer = new Int16Array(SAMPLES_PER_TICK * AUDIO_FORMAT.channels).fill(0);
+    // Accumulate the mix in floats: summing directly into an Int16Array wraps
+    // around on overflow (e.g. ducked track + overlay), producing loud crackle.
+    // We clamp once, after all sources are summed.
+    const mixedBuffer = new Float32Array(SAMPLES_PER_TICK * AUDIO_FORMAT.channels);
 
     if (activeItems.length === 0) {
       // No active items - return silence (but stream continues)
-      return Buffer.from(mixedBuffer.buffer);
+      return Buffer.alloc(BYTES_PER_TICK);
     }
 
     // Separate parent items from overlay items
@@ -1440,11 +1500,12 @@ class RadioStreamer {
     }
     
     // Clip the mixed audio to prevent distortion (ensure values are within 16-bit range)
+    const pcmOut = new Int16Array(mixedBuffer.length);
     for (let i = 0; i < mixedBuffer.length; i++) {
-      mixedBuffer[i] = Math.max(-32768, Math.min(32767, mixedBuffer[i]));
+      pcmOut[i] = Math.max(-32768, Math.min(32767, Math.round(mixedBuffer[i])));
     }
 
-    return Buffer.from(mixedBuffer.buffer);
+    return Buffer.from(pcmOut.buffer);
   }
 
   // Finds upcoming items and starts fetching/decoding their audio
@@ -1686,7 +1747,30 @@ class RadioStreamer {
       },
       orderBy: { position: 'asc' },
     });
-    
+
+    // Enriching + laying out the timeline is expensive (a content query per
+    // item plus heavy logging — with hundreds of items that stalled the audio
+    // engine every 10s reload and made the stream stutter). Skip the rebuild
+    // when nothing changed; a periodic full rebuild still picks up edits made
+    // directly to content tables (e.g. a re-uploaded track file).
+    const signature =
+      `${todayDateKey}|${this.processedFilesSignature}|` +
+      JSON.stringify(
+        todayItems.map((i) => [
+          i.id, i.position, i.startTimeOffset, i.contentType, i.contentId,
+          i.volume, i.fadeInDuration, i.fadeOutDuration, i.playbackStartTime,
+          i.playbackEndTime, i.mixMode, i.parentItemId, i.startTimeInParent,
+          i.duckingVolume,
+        ])
+      );
+    const fullRebuildDue = Date.now() - this.lastFullTimelineBuildMs > 5 * 60 * 1000;
+    if (!fullRebuildDue && signature === this.timelineSignature) {
+      this.evictFinishedAudioFromCache();
+      return;
+    }
+    this.timelineSignature = signature;
+    this.lastFullTimelineBuildMs = Date.now();
+
     if (todayItems.length === 0) {
       console.warn(`[Station ${this.stationId}] No timeline items found for today (${todayDateKey}).`);
       this.timelineItems = [];
@@ -1694,9 +1778,9 @@ class RadioStreamer {
       this.showTime = getStationTimeOfDaySeconds(now, stationTimeZone);
       return;
     }
-    
+
     console.log(`[Station ${this.stationId}] Found ${todayItems.length} timeline items for today (${todayDateKey})`);
-    
+
     this.showStartTime = now;
     
     // Calculate current time of day in seconds (e.g., 6:00 PM = 18*3600 = 64800 seconds)
@@ -1716,20 +1800,6 @@ class RadioStreamer {
     this.evictFinishedAudioFromCache();
 
     console.log(`[Station ${this.stationId}] Loaded ${this.timelineItems.length} valid items for today. Stream synchronized to start of day.`);
-    
-    // Debug: Log timeline items with their calculated times
-    if (this.timelineItems.length > 0) {
-      console.log(`[Station ${this.stationId}] Timeline items:`);
-      this.timelineItems.forEach((item, idx) => {
-        const startHours = Math.floor(item.calculatedStartTime / 3600);
-        const startMins = Math.floor((item.calculatedStartTime % 3600) / 60);
-        const startSecs = Math.floor(item.calculatedStartTime % 60);
-        const endHours = Math.floor(item.calculatedEndTime / 3600);
-        const endMins = Math.floor((item.calculatedEndTime % 3600) / 60);
-        const endSecs = Math.floor(item.calculatedEndTime % 60);
-        console.log(`  [${idx}] ${item.contentTitle || 'Untitled'}: ${startHours}:${startMins.toString().padStart(2, '0')}:${startSecs.toString().padStart(2, '0')} → ${endHours}:${endMins.toString().padStart(2, '0')}:${endSecs.toString().padStart(2, '0')} (startTimeOffset: ${item.startTimeOffset}s)`);
-      });
-    }
   }
 
   // Decoded PCM is ~10MB per minute of audio; drop tracks that already finished
@@ -1750,39 +1820,51 @@ class RadioStreamer {
     }
   }
 
-  // Check for processed audio file for an item
-  private getProcessedAudioUrl(itemId: number, originalUrl: string | null): string | null {
-    if (!originalUrl) return null;
-    
+  // Latest processed file per item, refreshed asynchronously. The old
+  // implementation ran a synchronous readdir of uploads/processed for EVERY
+  // track on EVERY timeline reload (hundreds of blocking filesystem calls
+  // every 10 seconds) and again on every 100ms audio tick — enough event-loop
+  // stalling to make the broadcast stutter.
+  private processedFilesByItemId = new Map<number, string>();
+  private processedFilesSignature = '';
+
+  private async refreshProcessedFilesCache(): Promise<void> {
     try {
       const processedDir = path.join(process.cwd(), 'uploads', 'processed');
-      if (!fs.existsSync(processedDir)) return null;
-      
-      // Look for the most recent processed file for this item
-      const files = fs.readdirSync(processedDir);
-      const itemFiles = files.filter(f => f.startsWith(`processed_item_${itemId}_`) && f.endsWith('.mp3'));
-      
-      if (itemFiles.length > 0) {
-        // Sort by timestamp (newest first)
-        itemFiles.sort((a, b) => {
-          const timestampA = parseInt(a.match(/_(\d+)\.mp3$/)?.[1] || '0');
-          const timestampB = parseInt(b.match(/_(\d+)\.mp3$/)?.[1] || '0');
-          return timestampB - timestampA;
-        });
-        
-        const latestFile = itemFiles[0];
-        const baseUrl = process.env.API_BASE_URL || 'http://localhost:3001';
-        const processedUrl = `${baseUrl}/api/uploads/processed/${latestFile}`;
-        
-        // Log when processed audio is found
-        console.log(`[Station ${this.stationId}] Using processed audio for item ${itemId}: ${latestFile}`);
-        return processedUrl;
+      let files: string[] = [];
+      try {
+        files = await fs.promises.readdir(processedDir);
+      } catch {
+        files = []; // Directory may not exist yet
       }
+      const newest = new Map<number, { file: string; ts: number }>();
+      for (const file of files) {
+        const idMatch = file.match(/^processed_item_(\d+)_/);
+        if (!idMatch || !file.endsWith('.mp3')) continue;
+        const itemId = parseInt(idMatch[1], 10);
+        const ts = parseInt(file.match(/_(\d+)\.mp3$/)?.[1] || '0', 10);
+        const existing = newest.get(itemId);
+        if (!existing || ts > existing.ts) newest.set(itemId, { file, ts });
+      }
+      const next = new Map<number, string>();
+      for (const [itemId, entry] of newest) next.set(itemId, entry.file);
+      this.processedFilesByItemId = next;
+      this.processedFilesSignature = [...next.entries()]
+        .sort((a, b) => a[0] - b[0])
+        .map(([id, file]) => `${id}:${file}`)
+        .join('|');
     } catch (error) {
-      console.error(`Error checking for processed audio for item ${itemId}:`, error);
+      console.error(`[Station ${this.stationId}] Failed to refresh processed audio cache:`, error);
     }
-    
-    return null;
+  }
+
+  // Check for processed audio file for an item (pure in-memory lookup)
+  private getProcessedAudioUrl(itemId: number, originalUrl: string | null): string | null {
+    if (!originalUrl) return null;
+    const latestFile = this.processedFilesByItemId.get(itemId);
+    if (!latestFile) return null;
+    const baseUrl = process.env.API_BASE_URL || 'http://localhost:3001';
+    return `${baseUrl}/api/uploads/processed/${latestFile}`;
   }
 
   // Takes raw show_items and queries the correct content tables to get necessary details

@@ -97,7 +97,6 @@ interface PublicRadioContextValue {
   volume: number;
   isMuted: boolean;
   currentTime: Date;
-  currentListeners: number;
   radioState: RadioState;
   hasPlayableContent: boolean;
   setVolume: (value: number) => void;
@@ -297,21 +296,6 @@ export function PublicRadioProvider({ children }: { children: React.ReactNode })
     enabled: isPublicRoute && enableProtectedPublicFallback && allowPublicCatalogRequests,
     staleTime: 5 * 60 * 1000,
     retry: false,
-  });
-
-  const { data: listenerData } = useQuery<{ count: number }>({
-    queryKey: QUERY_KEYS.LISTENERS_CURRENT,
-    queryFn: async () => {
-      try {
-        const data = await api.get<{ count: number }>(API_ENDPOINTS.LISTENERS_CURRENT);
-        return data || { count: 0 };
-      } catch {
-        return { count: 0 };
-      }
-    },
-    enabled: isPublicRoute,
-    refetchInterval: isPublicRoute ? POLLING_INTERVALS.LISTENER_UPDATE : false,
-    refetchIntervalInBackground: true,
   });
 
   useEffect(() => {
@@ -665,8 +649,12 @@ export function PublicRadioProvider({ children }: { children: React.ReactNode })
 
       const buffered = audio.buffered;
       const bufferedEnd = buffered.length > 0 ? buffered.end(buffered.length - 1) : 0;
+      // The server sends ~10s of burst audio on connect so playback has a
+      // cushion against network jitter — that cushion is normal, not drift.
+      // Only rejoin when we are far behind the live edge (throttled tab, OS
+      // paused audio while the connection kept buffering).
       const lagBehindLive = bufferedEnd - time;
-      if (!audio.paused && lagBehindLive > 12) {
+      if (!audio.paused && lagBehindLive > 35) {
         lastProgressRef.current = { time, at: now };
         void connectLiveStream();
         return;
@@ -698,8 +686,9 @@ export function PublicRadioProvider({ children }: { children: React.ReactNode })
 
       const buffered = audio.buffered;
       const bufferedEnd = buffered.length > 0 ? buffered.end(buffered.length - 1) : 0;
+      // Tolerate the server's ~10s burst-on-connect cushion (see watchdog above).
       const lagBehindLive = bufferedEnd - audio.currentTime;
-      if (audio.paused || audio.ended || lagBehindLive > 12) {
+      if (audio.paused || audio.ended || lagBehindLive > 35) {
         void connectLiveStream();
       }
     };
@@ -816,14 +805,13 @@ export function PublicRadioProvider({ children }: { children: React.ReactNode })
       volume,
       isMuted,
       currentTime,
-      currentListeners: listenerData?.count || 0,
       radioState,
       hasPlayableContent,
       setVolume,
       setIsMuted,
       togglePlayPause,
     }),
-    [currentSong, isPlaying, volume, isMuted, currentTime, listenerData?.count, radioState, hasPlayableContent, togglePlayPause]
+    [currentSong, isPlaying, volume, isMuted, currentTime, radioState, hasPlayableContent, togglePlayPause]
   );
 
   return (

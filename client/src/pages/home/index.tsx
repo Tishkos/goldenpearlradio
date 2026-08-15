@@ -17,7 +17,6 @@ import {
   CurrentSongDisplay,
   VolumeControl,
   PowerControl,
-  ListenerCount,
   WhatsappContactButton,
 } from "./components";
 
@@ -28,7 +27,6 @@ export default function Home() {
     volume,
     isMuted,
     currentTime,
-    currentListeners,
     hasPlayableContent,
     setVolume,
     setIsMuted,
@@ -133,7 +131,9 @@ export default function Home() {
                       onTogglePlayPause={togglePlayPause}
                     />
 
-                    <ListenerCount count={currentListeners} />
+                    {/* Listener stats are admin-only (dashboard listeners map);
+                        the spacer keeps the power button centered. */}
+                    <div className="flex-1" aria-hidden="true" />
                   </div>
                 </div>
                 <RadioHeader currentTime={currentTime} />

@@ -242,6 +242,8 @@ export function PowerControl({
 
 /**
  * Listener Count Display
+ * No longer rendered on the public site — listener stats are admin-only
+ * (see the admin dashboard listeners map). Kept for potential admin reuse.
  */
 export function ListenerCount({ count }: { count: number }) {
   return (
