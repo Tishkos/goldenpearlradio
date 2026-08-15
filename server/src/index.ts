@@ -917,6 +917,9 @@ class RadioStreamer {
         }
         
         this.mainFfmpegProcess = spawn(ffmpegPath, [
+            // Real errors only: the default per-0.5s progress stats wrote ~14MB
+            // of docker logs per day on a 24/7 stream (no log rotation on the VPS).
+            '-nostats', '-loglevel', 'error',
             '-f', `s${AUDIO_FORMAT.bitDepth}le`, // Input format: raw PCM 16-bit little-endian
             '-ar', `${AUDIO_FORMAT.sampleRate}`, // Input sample rate
             '-ac', `${AUDIO_FORMAT.channels}`,   // Input channels (stereo)
