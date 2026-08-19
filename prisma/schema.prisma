@@ -470,3 +470,54 @@ model PublishedTimeline {
 }
 
 // Explicit join table for playlists and tracks - REMOVED
+
+//--------------------------------------------------------------------------------
+// Listener history (world map: live / 24h / 7 days / this month)
+//--------------------------------------------------------------------------------
+
+// One row per tune-in. Written when a listener opens /stream (or starts the
+// website player) and closed when they drop. IPs are never stored in clear —
+// only a salted hash, so the map can tell listeners apart without holding
+// personal data.
+model ListenerSession {
+  id           String    @id @default(uuid())
+  listenerHash String    @map("listener_hash")
+  source       String    @default("stream") // "stream" | "web"
+  country      String?
+  city         String?
+  lat          Float?
+  lon          Float?
+  startedAt    DateTime  @default(now()) @map("started_at")
+  lastSeenAt   DateTime  @default(now()) @map("last_seen_at")
+  endedAt      DateTime? @map("ended_at")
+  seconds      Int       @default(0)
+
+  plays        ListenerPlay[]
+
+  @@index([startedAt])
+  @@index([lastSeenAt])
+  @@index([listenerHash])
+  @@index([country, city])
+  @@map("listener_sessions")
+}
+
+// What a given session actually heard, one row per item the listener was
+// tuned in for, with the seconds of it they actually received.
+model ListenerPlay {
+  id          Int      @id @default(autoincrement())
+  sessionId   String   @map("session_id")
+  showItemId  Int?     @map("show_item_id")
+  contentType String?  @map("content_type")
+  contentId   Int?     @map("content_id")
+  title       String
+  artist      String?
+  startedAt   DateTime @default(now()) @map("started_at")
+  lastSeenAt  DateTime @default(now()) @map("last_seen_at")
+  seconds     Int      @default(0)
+
+  session     ListenerSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@index([startedAt])
+  @@map("listener_plays")
+}

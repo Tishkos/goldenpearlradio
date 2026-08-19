@@ -14,16 +14,18 @@ import uploadRoutes from './routes/upload';
 import streamRoutes from './routes/stream';
 import geoip from 'fast-geoip';
 import { ensureScheduleTables, listScheduleItems, markScheduleItemInterested } from './utils/scheduleItems';
+import {
+  attachListener,
+  detachListener,
+  getLiveSessions,
+  setListenerGeo,
+  setNowPlayingResolver,
+  startListenerTracking,
+  type ListenerGeo,
+  type NowPlayingItem,
+} from './utils/listenerTracking';
 
 dotenv.config();
-
-// --- LISTENER GEOLOCATION ---
-interface ListenerGeo {
-  country: string;      // ISO country code, e.g. "AE"
-  city: string;
-  lat: number;
-  lon: number;
-}
 
 // The backend sits behind two nginx proxies (host TLS -> container -> node), so the
 // real client address is the FIRST entry of X-Forwarded-For, not the socket address.
@@ -50,30 +52,9 @@ function isPrivateIp(ip: string): boolean {
 
 const geoCache = new Map<string, ListenerGeo | null>();
 
-// Rolling 24h log of located listeners (keyed by IP) so the admin map can show
-// where recent listeners were, not just who is connected this second.
-const RECENT_SIGHTING_TTL_MS = 24 * 60 * 60 * 1000;
-const recentSightings = new Map<string, { geo: ListenerGeo; lastSeen: number }>();
-
-function recordSighting(ip: string | undefined, geo: ListenerGeo | null | undefined) {
-  if (!ip || !geo) return;
-  recentSightings.set(ip, { geo, lastSeen: Date.now() });
-}
-
-function pruneSightings() {
-  const cutoff = Date.now() - RECENT_SIGHTING_TTL_MS;
-  for (const [ip, sighting] of recentSightings.entries()) {
-    if (sighting.lastSeen < cutoff) recentSightings.delete(ip);
-  }
-  if (recentSightings.size > 5000) {
-    const oldestFirst = [...recentSightings.entries()].sort(
-      (a, b) => a[1].lastSeen - b[1].lastSeen
-    );
-    for (const [ip] of oldestFirst.slice(0, recentSightings.size - 5000)) {
-      recentSightings.delete(ip);
-    }
-  }
-}
+// Historic listener locations now live in the listener_sessions table (see
+// utils/listenerTracking), which survives restarts and reaches back months —
+// the old in-memory 24h sighting log could do neither.
 
 async function lookupListenerGeo(ip: string): Promise<ListenerGeo | null> {
   if (isPrivateIp(ip)) return null;
@@ -256,50 +237,87 @@ app.get('/api/listeners/current', authenticateToken, requireAdmin, async (req: R
     res.status(500).json({ error: error.message });
   }
 });
+// --- LISTENER MAP & HISTORY (admin only) ---
+// "live" is read from the open sockets; every other range is read back from the
+// listener_sessions table, so history survives restarts and reaches back months.
 
-// Live listener world map data (city-level aggregates only — never exposes IPs)
+type ListenerRange = 'live' | '24h' | '7d' | 'month';
+
+const LISTENER_RANGES: ListenerRange[] = ['live', '24h', '7d', 'month'];
+
+function parseListenerRange(value: unknown): ListenerRange {
+  const raw = String(value ?? 'live');
+  return (LISTENER_RANGES as string[]).includes(raw) ? (raw as ListenerRange) : 'live';
+}
+
+// Midnight on the 1st of the current month, in the station's timezone rather
+// than the server's — a VPS in UTC must not roll the month over early or late.
+function startOfStationMonth(now = new Date()): Date {
+  const parts = getStationParts(now);
+  const wallClockAsUtc = Date.UTC(Number(parts.year), Number(parts.month) - 1, 1, 0, 0, 0);
+  const probe = getStationParts(new Date(wallClockAsUtc));
+  const probeAsUtc = Date.UTC(
+    Number(probe.year),
+    Number(probe.month) - 1,
+    Number(probe.day),
+    probe.hour,
+    probe.minute,
+    probe.second
+  );
+  return new Date(wallClockAsUtc - (probeAsUtc - wallClockAsUtc));
+}
+
+function rangeStart(range: ListenerRange, now = new Date()): Date {
+  switch (range) {
+    case '24h':
+      return new Date(now.getTime() - 24 * 60 * 60 * 1000);
+    case '7d':
+      return new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    case 'month':
+      return startOfStationMonth(now);
+    default:
+      return new Date(now.getTime() - 60 * 1000);
+  }
+}
+
+// Short, stable, non-reversible handle for a listener, e.g. "Listener 7A3F".
+function listenerLabel(hash: string): string {
+  return `Listener ${hash.slice(0, 4).toUpperCase()}`;
+}
+
+interface MapLocationRow {
+  city: string;
+  country: string;
+  lat: number;
+  lon: number;
+  count: number;
+  sessions: number;
+  seconds: number;
+}
+
+// A session is still on air if it has not ended and was credited very recently
+const LIVE_SESSION_WINDOW_MS = 90_000;
+
 app.get('/api/listeners/map', authenticateToken, requireAdmin, async (req: Request, res: Response) => {
+  const range = parseListenerRange(req.query.range);
+  const now = Date.now();
+
   try {
-    const streamer = streamers.get('1');
-    const httpClients: Map<string, HttpClient> | undefined = streamer
-      ? (streamer as any).httpClients
-      : undefined;
+    if (range === 'live') {
+      const live = getLiveSessions();
+      const buckets = new Map<string, MapLocationRow>();
+      let located = 0;
 
-    // One entry per distinct listener. Browser listeners hold an open /stream
-    // connection AND send heartbeats, so dedupe website pings against stream IPs.
-    const seenIps = new Set<string>();
-    const entries: { ip?: string; geo: ListenerGeo | null | undefined }[] = [];
-
-    if (httpClients) {
-      for (const client of httpClients.values()) {
-        if (client.ip) seenIps.add(client.ip);
-        entries.push({ ip: client.ip, geo: client.geo });
-      }
-    }
-
-    const now = Date.now();
-    for (const listener of activeWebsiteListeners.values()) {
-      if (now - listener.lastPing >= 10000 || !listener.isPlaying) continue;
-      if (listener.ip && seenIps.has(listener.ip)) continue;
-      if (listener.ip) seenIps.add(listener.ip);
-      entries.push({ ip: listener.ip, geo: listener.geo });
-    }
-
-    // Long-lived stream connections never re-ping, so refresh their sightings here
-    for (const entry of entries) recordSighting(entry.ip, entry.geo);
-    pruneSightings();
-
-    // Aggregate to city buckets
-    const aggregate = (geos: ListenerGeo[]) => {
-      const buckets = new Map<
-        string,
-        { city: string; country: string; lat: number; lon: number; count: number }
-      >();
-      for (const geo of geos) {
+      for (const session of live) {
+        const geo = session.geo;
+        if (!geo) continue;
+        located++;
         const key = `${geo.country}|${geo.city}|${geo.lat.toFixed(1)},${geo.lon.toFixed(1)}`;
         const bucket = buckets.get(key);
         if (bucket) {
           bucket.count++;
+          bucket.sessions++;
+          bucket.seconds += session.seconds;
         } else {
           buckets.set(key, {
             city: geo.city,
@@ -307,33 +325,210 @@ app.get('/api/listeners/map', authenticateToken, requireAdmin, async (req: Reque
             lat: geo.lat,
             lon: geo.lon,
             count: 1,
+            sessions: 1,
+            seconds: session.seconds,
           });
         }
       }
-      return Array.from(buckets.values()).sort((a, b) => b.count - a.count);
-    };
 
-    const liveGeos = entries.map((e) => e.geo).filter((g): g is ListenerGeo => Boolean(g));
-    const unlocated = entries.length - liveGeos.length;
-    const locations = aggregate(liveGeos);
-    const countries = new Set(locations.map((l) => l.country)).size;
+      const locations = Array.from(buckets.values()).sort((a, b) => b.count - a.count);
+      const seconds = live.reduce((sum, s) => sum + s.seconds, 0);
 
-    // Everyone located within the last 24h (one entry per distinct IP)
-    const recentGeos = Array.from(recentSightings.values()).map((s) => s.geo);
-    const recent = aggregate(recentGeos);
+      return res.json({
+        range,
+        total: live.length,
+        located,
+        unlocated: live.length - located,
+        countries: new Set(locations.map((l) => l.country)).size,
+        sessions: live.length,
+        seconds,
+        avgSeconds: live.length ? Math.round(seconds / live.length) : 0,
+        locations,
+        updatedAt: now,
+      });
+    }
 
-    res.json({
-      total: entries.length,
-      located: liveGeos.length,
-      unlocated,
-      countries,
+    const since = rangeStart(range);
+
+    const [totals, rows] = await Promise.all([
+      prisma.$queryRaw<
+        { listeners: number; sessions: number; seconds: number; unlocated: number }[]
+      >`
+        SELECT
+          COUNT(DISTINCT listener_hash)::int AS listeners,
+          COUNT(*)::int AS sessions,
+          COALESCE(SUM(seconds), 0)::int AS seconds,
+          COUNT(*) FILTER (WHERE lat IS NULL OR lon IS NULL)::int AS unlocated
+        FROM listener_sessions
+        WHERE started_at >= ${since}
+      `,
+      prisma.$queryRaw<
+        {
+          country: string | null;
+          city: string | null;
+          lat: number;
+          lon: number;
+          listeners: number;
+          sessions: number;
+          seconds: number;
+        }[]
+      >`
+        SELECT
+          country,
+          city,
+          AVG(lat)::float8 AS lat,
+          AVG(lon)::float8 AS lon,
+          COUNT(DISTINCT listener_hash)::int AS listeners,
+          COUNT(*)::int AS sessions,
+          COALESCE(SUM(seconds), 0)::int AS seconds
+        FROM listener_sessions
+        WHERE started_at >= ${since} AND lat IS NOT NULL AND lon IS NOT NULL
+        GROUP BY country, city
+        ORDER BY listeners DESC
+        LIMIT 500
+      `,
+    ]);
+
+    const summary = totals[0] || { listeners: 0, sessions: 0, seconds: 0, unlocated: 0 };
+    const locations: MapLocationRow[] = rows.map((row) => ({
+      city: row.city || 'Unknown',
+      country: row.country || 'Unknown',
+      lat: row.lat,
+      lon: row.lon,
+      count: row.listeners,
+      sessions: row.sessions,
+      seconds: row.seconds,
+    }));
+
+    return res.json({
+      range,
+      total: summary.listeners,
+      located: locations.reduce((sum, l) => sum + l.count, 0),
+      unlocated: summary.unlocated,
+      countries: new Set(locations.map((l) => l.country)).size,
+      sessions: summary.sessions,
+      seconds: summary.seconds,
+      avgSeconds: summary.sessions ? Math.round(summary.seconds / summary.sessions) : 0,
       locations,
-      recentTotal: recentGeos.length,
-      recent,
+      since: since.toISOString(),
       updatedAt: now,
     });
   } catch (error: any) {
     console.error('Error building listener map:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// The individual listeners behind a dot on the map. Identified only by a salted
+// hash of their IP, never the address itself.
+app.get('/api/listeners/sessions', authenticateToken, requireAdmin, async (req: Request, res: Response) => {
+  try {
+    const range = parseListenerRange(req.query.range);
+    const since = rangeStart(range);
+    const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 500);
+    const country = typeof req.query.country === 'string' ? req.query.country : undefined;
+    const city = typeof req.query.city === 'string' ? req.query.city : undefined;
+
+    const where: any = { startedAt: { gte: since } };
+    if (range === 'live') {
+      where.endedAt = null;
+      where.lastSeenAt = { gte: new Date(Date.now() - LIVE_SESSION_WINDOW_MS) };
+      delete where.startedAt;
+    }
+    if (country && country !== 'Unknown') where.country = country;
+    if (city && city !== 'Unknown') where.city = city;
+
+    const rows = await prisma.listenerSession.findMany({
+      where,
+      orderBy: [{ lastSeenAt: 'desc' }],
+      take: limit,
+      include: {
+        plays: { orderBy: { seconds: 'desc' }, take: 1 },
+        _count: { select: { plays: true } },
+      },
+    });
+
+    const liveCutoff = Date.now() - LIVE_SESSION_WINDOW_MS;
+    res.json({
+      range,
+      country: country || null,
+      city: city || null,
+      sessions: rows.map((session) => ({
+        id: session.id,
+        label: listenerLabel(session.listenerHash),
+        source: session.source,
+        country: session.country,
+        city: session.city,
+        startedAt: session.startedAt,
+        endedAt: session.endedAt,
+        lastSeenAt: session.lastSeenAt,
+        seconds: session.seconds,
+        isLive: !session.endedAt && session.lastSeenAt.getTime() >= liveCutoff,
+        playCount: session._count.plays,
+        topPlay: session.plays[0]
+          ? {
+              title: session.plays[0].title,
+              artist: session.plays[0].artist,
+              seconds: session.plays[0].seconds,
+            }
+          : null,
+      })),
+    });
+  } catch (error: any) {
+    console.error('Error listing listener sessions:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// One listener's tune-in: how long they stayed and every song they heard.
+app.get('/api/listeners/sessions/:id', authenticateToken, requireAdmin, async (req: Request, res: Response) => {
+  try {
+    const session = await prisma.listenerSession.findUnique({
+      where: { id: req.params.id },
+      include: { plays: { orderBy: { startedAt: 'asc' } } },
+    });
+    if (!session) return res.status(404).json({ error: 'Session not found' });
+
+    // Context: has this person tuned in before? Aggregated over the same
+    // retention window the table keeps.
+    const history = await prisma.listenerSession.aggregate({
+      where: { listenerHash: session.listenerHash },
+      _count: { id: true },
+      _sum: { seconds: true },
+      _min: { startedAt: true },
+    });
+
+    const liveCutoff = Date.now() - LIVE_SESSION_WINDOW_MS;
+    res.json({
+      id: session.id,
+      label: listenerLabel(session.listenerHash),
+      source: session.source,
+      country: session.country,
+      city: session.city,
+      lat: session.lat,
+      lon: session.lon,
+      startedAt: session.startedAt,
+      endedAt: session.endedAt,
+      lastSeenAt: session.lastSeenAt,
+      seconds: session.seconds,
+      isLive: !session.endedAt && session.lastSeenAt.getTime() >= liveCutoff,
+      plays: session.plays.map((play) => ({
+        id: play.id,
+        title: play.title,
+        artist: play.artist,
+        contentType: play.contentType,
+        contentId: play.contentId,
+        startedAt: play.startedAt,
+        seconds: play.seconds,
+      })),
+      listenerTotals: {
+        sessions: history._count.id,
+        seconds: history._sum.seconds || 0,
+        firstHeardAt: history._min.startedAt,
+      },
+    });
+  } catch (error: any) {
+    console.error('Error loading listener session:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -649,7 +844,6 @@ app.post('/api/listeners/ping', async (req: Request, res: Response) => {
     const current = activeWebsiteListeners.get(listenerId);
     if (current && current.geo === undefined) {
       void lookupListenerGeo(ip).then((geo) => {
-        recordSighting(ip, geo);
         const entry = activeWebsiteListeners.get(listenerId);
         if (entry && entry.ip === ip) entry.geo = geo;
       });
@@ -704,6 +898,7 @@ interface HttpClient {
 interface TimelineItem extends DBShowItem {
   audioUrl: string | null;
   contentTitle: string;
+  contentArtist?: string | null;
   layer: number;
   calculatedStartTime: number;
   calculatedEndTime: number;
@@ -758,10 +953,14 @@ class RadioStreamer {
     const clientId = randomUUID();
     const client: HttpClient = { id: clientId, response, ip, connectedAt: Date.now() };
     this.httpClients.set(clientId, client);
+    // Every real listener — website, app or a raw stream URL — holds one of
+    // these sockets open for exactly as long as they listen, so this is what
+    // the session history is built from.
+    attachListener(clientId, { ip, source: 'stream' });
     if (ip) {
       // Resolve asynchronously so connecting a listener never waits on geo data
       void lookupListenerGeo(ip).then((geo) => {
-        recordSighting(ip, geo);
+        setListenerGeo(clientId, geo);
         const existing = this.httpClients.get(clientId);
         if (existing) existing.geo = geo;
       });
@@ -808,11 +1007,39 @@ class RadioStreamer {
 
   public removeHttpClient(clientId: string) {
     this.httpClients.delete(clientId);
+    detachListener(clientId);
     console.log(`[Station ${this.stationId}] Listener disconnected. Total: ${this.httpClients.size}`);
     // The engine keeps running with zero listeners. Stopping and cold-starting
     // per listener caused seconds of silence on every (re)connect: schedule
     // queries plus decoding the current track had to finish before any audio.
     // An always-on engine means every listener joins the broadcast instantly.
+  }
+
+  /**
+   * What is on air right now, from the engine's own timeline — the same item
+   * every listener is hearing this second. Used to record what each listening
+   * session actually heard.
+   */
+  public getNowPlaying(): NowPlayingItem | null {
+    const active = this.timelineItems.filter(
+      (item) => this.showTime >= item.calculatedStartTime && this.showTime < item.calculatedEndTime
+    );
+    if (active.length === 0) return null;
+
+    // Overlays (ads, jingles, host drops) play over a track; credit the track,
+    // which is what a listener would say they were listening to.
+    const parents = active.filter((item) => !item.parentItemId);
+    const item =
+      parents.find((p) => p.contentType === ContentType.TRACK) || parents[0] || active[0];
+    if (!item) return null;
+
+    return {
+      showItemId: item.id ?? null,
+      contentType: item.contentType ?? null,
+      contentId: item.contentId ?? null,
+      title: item.contentTitle || 'Untitled',
+      artist: item.contentArtist ?? null,
+    };
   }
 
   // Start the broadcast engine independently of listeners (called at boot).
@@ -895,6 +1122,7 @@ class RadioStreamer {
             client.response.end();
           }
         } catch {}
+        detachListener(client.id);
     }
     this.httpClients.clear();
   }
@@ -1878,9 +2106,9 @@ class RadioStreamer {
               case ContentType.TRACK:
                   const track = await prisma.track.findUnique({
                     where: { id: item.contentId },
-                    select: { title: true, url: true, duration: true }
+                    select: { title: true, artist: true, url: true, duration: true }
                   });
-                  
+
                   // Check if this track has overlay items (items with parentItemId = this item.id)
                   const hasOverlays = items.some(otherItem => otherItem.parentItemId === item.id);
                   
@@ -1893,6 +2121,7 @@ class RadioStreamer {
                       console.log(`[Station ${this.stationId}] ✅ Track "${track?.title}" (id: ${item.id}) has overlays - using processed audio: ${processedUrl}`);
                       content = { 
                         title: track?.title, 
+                        artist: track?.artist,
                         audioUrl: processedUrl, // Use processed audio when overlays exist
                         duration: track?.duration 
                       };
@@ -1900,15 +2129,17 @@ class RadioStreamer {
                       console.warn(`[Station ${this.stationId}] ⚠️ Track "${track?.title}" (id: ${item.id}) has overlays but no processed audio found! Using original audio (overlays won't be mixed).`);
                       content = { 
                         title: track?.title, 
+                        artist: track?.artist,
                         audioUrl: track?.url, // Fallback to original if processed not found
                         duration: track?.duration 
                       };
                     }
                   } else {
                     // No overlays - use processed if available, otherwise original
-                    content = { 
-                      title: track?.title, 
-                      audioUrl: processedUrl || track?.url, 
+                    content = {
+                      title: track?.title,
+                      artist: track?.artist,
+                      audioUrl: processedUrl || track?.url,
                       duration: track?.duration 
                     };
                   }
@@ -1994,10 +2225,11 @@ class RadioStreamer {
           }
           if (content && content.audioUrl) {
               // Include all item properties including parentItemId, startTimeInParent, and duckingVolume
-              return { 
-                ...item, 
-                audioUrl: content.audioUrl, 
-                contentTitle: content.title || 'Untitled', 
+              return {
+                ...item,
+                audioUrl: content.audioUrl,
+                contentTitle: content.title || 'Untitled',
+                contentArtist: content.artist || null,
                 baseDuration: content.duration,
                 parentItemId: item.parentItemId || null,
                 startTimeInParent: item.startTimeInParent || null,
@@ -2076,6 +2308,7 @@ class RadioStreamer {
               ...(item as DBShowItem),
               audioUrl: item.audioUrl!,
               contentTitle: item.contentTitle!,
+              contentArtist: item.contentArtist ?? null,
               baseDuration: item.baseDuration!,
               duration,
               layer,
@@ -2097,6 +2330,7 @@ class RadioStreamer {
                 client.response.end();
             }
           } catch {}
+          detachListener(client.id);
       }
       this.httpClients.clear();
   }
@@ -2308,4 +2542,9 @@ app.listen(PORT, '0.0.0.0', () => {
   const bootStreamer = new RadioStreamer('1');
   streamers.set('1', bootStreamer);
   bootStreamer.ensureStarted();
+
+  // Listener history: every open /stream socket is credited with listening time
+  // against whatever the engine says is on air.
+  setNowPlayingResolver(() => streamers.get('1')?.getNowPlaying() ?? null);
+  startListenerTracking();
 });
