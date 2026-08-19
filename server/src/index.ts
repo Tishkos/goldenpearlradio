@@ -295,8 +295,11 @@ interface MapLocationRow {
   seconds: number;
 }
 
-// A session is still on air if it has not ended and was credited very recently
-const LIVE_SESSION_WINDOW_MS = 90_000;
+// A session is still on air if it has not ended and was credited very recently.
+// The tracker refreshes lastSeenAt every 10s while a socket is open, so this is
+// comfortably above the update cadence — but well under the 90s reconnect grace
+// period, which would otherwise show departed listeners as "listening now".
+const LIVE_SESSION_WINDOW_MS = 30_000;
 
 app.get('/api/listeners/map', authenticateToken, requireAdmin, async (req: Request, res: Response) => {
   const range = parseListenerRange(req.query.range);
